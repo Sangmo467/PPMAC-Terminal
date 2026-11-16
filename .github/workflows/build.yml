@@ -10,6 +10,7 @@ permissions:
 
 env:
   QT_VERSION: "6.8.3"
+  QT_VERSION_MACOS: "6.9.2"
   PMAC_VERSION: "2.0.7"
   PMAC_REPO: "Sangmo467/communication-library-for-ppmac-rust"
   PMACT_ROOT: "${{ github.workspace }}/third_party/pmac-terminal-rs"
@@ -78,7 +79,7 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: ${{ env.QT_VERSION }}
+          version: ${{ env.QT_VERSION_MACOS }}
           arch: clang_64
           cache: true
 

@@ -28,7 +28,7 @@ PMAC 通信使用 `pmac.dll`（PMAC 2.0.7 MSVC x64 SDK）。
 ## 构建依赖
 
 - Windows 10/11 x64：Visual Studio 2022（MSVC）+ Qt 6.8.x MSVC 2022 64-bit
-- macOS 12+（Apple Silicon）：Xcode Command Line Tools + Qt 6.8.x macOS（universal，arm64 原生运行）
+- macOS 12+（Apple Silicon）：Xcode Command Line Tools + Qt 6.9.2+ macOS（universal，arm64 原生运行；兼容已移除 AGL 的 Xcode 26 SDK）
 - CMake ≥ 3.21、Rust stable（编译 `third_party/pmac-terminal-rs`）
 - PMAC 2.0.7 SDK（按平台选择）：`x86_64-pc-windows-msvc` 或 `aarch64-apple-darwin`，
   包含 `include/`、`native/pmac.dll|libpmac.dylib`、`cmake/PmacConfig.cmake`
