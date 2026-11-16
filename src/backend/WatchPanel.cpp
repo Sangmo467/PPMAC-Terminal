@@ -184,6 +184,7 @@ struct WatchPanel::Impl {
     QVector<Format> formats;
     QVector<quint64> masks;
     QVector<QString> raw;
+    HardwareConfig hardware;
     QString pollId;
     int nextQueryRow = 0;
     int periodMs = 100;
@@ -195,7 +196,7 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
     : QWidget(parent), d(std::make_unique<Impl>(api))
 {
     d->terminalBusy = std::move(terminalBusy);
-    const auto path = (QCoreApplication::applicationDirPath() + "/pmac.dll").toUtf8();
+    const auto path = RuntimePaths::pmacLibrary().toUtf8();
     if (d->api.create(reinterpret_cast<const uint8_t *>(path.constData()), size_t(path.size()),
                       &d->handle) != PMACT_OK)
         d->handle = 0;
@@ -233,6 +234,12 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
     d->table->setObjectName("watchTable");
     d->table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     d->table->setFont(TerminalColors::terminalFont());
+    QFont headerFont;
+    headerFont.setFamilies({QStringLiteral("Microsoft YaHei UI"), QStringLiteral("PingFang SC"),
+                            QStringLiteral("Helvetica Neue")});
+    headerFont.setPointSize(11);
+    headerFont.setWeight(QFont::Normal);
+    d->table->horizontalHeader()->setFont(headerFont);
     d->table->verticalHeader()->setVisible(false);
     d->table->setSelectionBehavior(QAbstractItemView::SelectRows);
     d->table->setEditTriggers(QAbstractItemView::SelectedClicked | QAbstractItemView::DoubleClicked
@@ -449,6 +456,10 @@ void WatchPanel::importSymbols()
 {
     if (!d->handle) return;
     d->api.setSymbols(d->handle, reinterpret_cast<const uint8_t *>("[]"), 2);
+    d->hardware.setInstances(d->backend ? d->backend->terminalHardware() : QStringList(),
+                             d->backend ? d->backend->terminalHardwareRoots() : QStringList(),
+                             d->backend ? d->backend->terminalAliases() : QStringList(),
+                             d->backend && d->backend->terminalHardwareKnown());
     if (!d->backend || d->backend->connectionState() != QLatin1String("connected")) return;
     const auto files = d->backend->terminalSymbols();
     if (files.isEmpty()) return;
@@ -462,12 +473,19 @@ QStringList WatchPanel::suggestFor(const QString &prefix, QHash<QString, QString
 {
     QStringList choices;
     if (help) help->clear();
-    for (const auto &item : QJsonDocument::fromJson(candidates(prefix.toUtf8())).array()) {
+    const auto query = d->hardware.rewriteAlias(prefix);
+    for (const auto &item : QJsonDocument::fromJson(candidates(query.toUtf8())).array()) {
         const auto obj = item.toObject();
-        const auto name = obj.value("text").toString();
-        choices << name;
-        if (help) help->insert(name, obj.value("help").toString());
+        const auto raw = obj.value("text").toString();
+        for (const auto &name : completionChoices(prefix, raw, &d->hardware)) {
+            choices << name;
+            if (help) help->insert(name, obj.value("help").toString());
+        }
     }
+    d->hardware.appendAliasInstances(prefix, &choices);
+    std::sort(choices.begin(), choices.end(), [](const QString &a, const QString &b) {
+        return a.compare(b, Qt::CaseInsensitive) < 0;
+    });
     return choices;
 }
 

@@ -14,6 +14,7 @@ qt_add_qml_module(PmacTerminalBackend
         WatchPanel.cpp
         NativeMenu.h
         NativeMenu.cpp
+        RuntimePaths.h
         PmacConnection.h
         Backend.h
         Backend.cpp
@@ -21,11 +22,17 @@ qt_add_qml_module(PmacTerminalBackend
         Translator.cpp
 )
 
-# 使用顶层通过 -DPMAC_SDK_DIR 指定的 pmac 2.0.6 MSVC x64 SDK。
+# 使用顶层通过 -DPMAC_SDK_DIR 指定的 pmac 2.0.7 SDK（按平台选择默认目录）。
 # 清除上一次配置缓存的 Pmac_DIR，否则 SDK 升级后 find_package 仍会命中旧版本目录。
 unset(Pmac_DIR CACHE)
 if(NOT PMAC_SDK_DIR)
-    set(PMAC_SDK_DIR "${CMAKE_SOURCE_DIR}/pmac-2.0.6-x86_64-pc-windows-msvc-release")
+    if(WIN32)
+        set(PMAC_SDK_DIR "${CMAKE_SOURCE_DIR}/pmac-2.0.7-x86_64-pc-windows-msvc-release")
+    elseif(APPLE)
+        set(PMAC_SDK_DIR "${CMAKE_SOURCE_DIR}/pmac-2.0.7-aarch64-apple-darwin-release")
+    else()
+        set(PMAC_SDK_DIR "${CMAKE_SOURCE_DIR}/pmac-2.0.7-x86_64-unknown-linux-gnu-release")
+    endif()
 endif()
 find_package(Pmac CONFIG REQUIRED PATHS "${PMAC_SDK_DIR}/cmake" NO_DEFAULT_PATH)
 set_target_properties(Pmac::pmac PROPERTIES IMPORTED_GLOBAL TRUE)
@@ -45,5 +52,5 @@ if(MSVC)
     target_compile_options(PmacTerminalBackend PRIVATE /utf-8)
 endif()
 if(WIN32)
-    target_link_libraries(PmacTerminalBackend PUBLIC user32)
+    target_link_libraries(PmacTerminalBackend PUBLIC user32 imm32)
 endif()

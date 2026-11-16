@@ -35,6 +35,16 @@ public:
         catch (const pmac::Error &) { return false; }
     }
 
+    // 复位会重启 gpascii，SDK 维护面必须显式修复；否则下一次 shell 读取
+    // （符号文件）会置 unknown_write，后续请求全部返回 RECOVERY_REQUIRED(-27)。
+    void repairAfterReset()
+    {
+        m_client.repairMaintenanceAsync().wait();
+        const auto state = m_client.poolState();
+        if (state.unknown_write)
+            m_client.confirmRecovery(state.revision, PMAC_RECOVERY_CONFIRM_UNKNOWN_WRITES);
+    }
+
     pmac::Client &client() { return m_client; }
 
 private:

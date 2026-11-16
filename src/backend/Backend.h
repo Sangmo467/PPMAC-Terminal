@@ -30,6 +30,10 @@ public:
     void sendTerminalCommand(const QString &requestId, const QString &command);
     void refreshTerminalSymbols();
     QStringList terminalSymbols() const { return m_terminalSymbols; }
+    QStringList terminalHardware() const { return m_terminalHardware; }
+    QStringList terminalHardwareRoots() const { return m_terminalHardwareRoots; }
+    QStringList terminalAliases() const { return m_terminalAliases; }
+    bool terminalHardwareKnown() const { return m_terminalHardwareKnown; }
     QString terminalSymbolsError() const { return m_terminalSymbolsError; }
 
     QString connectionState() const { return m_connectionState; }
@@ -56,6 +60,10 @@ private:
     void setBusy(bool busy);
 
     QStringList m_terminalSymbols;
+    QStringList m_terminalHardware;
+    QStringList m_terminalHardwareRoots;
+    QStringList m_terminalAliases;
+    bool m_terminalHardwareKnown = false;
     QString m_terminalSymbolsError;
     quint64 m_terminalGeneration = 0;
     bool m_terminalSymbolsLoading = false;

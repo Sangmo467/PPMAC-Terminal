@@ -2,7 +2,7 @@
 
 从 SetupTool 中独立提取的 PMAC 终端程序：顶部连接栏 + 多标签终端 + 左侧 Watch 面板。
 界面使用 Qt 6 / QML 外壳，终端为原生 QWidget，命令补全由 Rust 编写的 `pmac-terminal-rs` 提供，
-PMAC 通信使用 `pmac.dll`（PMAC 2.0.6 MSVC x64 SDK）。
+PMAC 通信使用 `pmac.dll`（PMAC 2.0.7 MSVC x64 SDK）。
 
 ## 功能
 
@@ -27,29 +27,81 @@ PMAC 通信使用 `pmac.dll`（PMAC 2.0.6 MSVC x64 SDK）。
 
 ## 构建依赖
 
-- Windows 10/11 x64，Visual Studio 2022（MSVC）
-- Qt 6.8.x MSVC 2022 64-bit
-- CMake ≥ 3.21
-- PMAC 2.0.6 MSVC x64 SDK：包含 `include/`、`native/pmac.dll`、`cmake/PmacConfig.cmake`
-- `pmac-terminal-rs` 构建产物：`dist/pmac_terminal_core.dll` 与 `include/pmac_terminal.h`
+- Windows 10/11 x64：Visual Studio 2022（MSVC）+ Qt 6.8.x MSVC 2022 64-bit
+- macOS 12+（Apple Silicon）：Xcode Command Line Tools + Qt 6.8.x macOS（universal，arm64 原生运行）
+- CMake ≥ 3.21、Rust stable（编译 `third_party/pmac-terminal-rs`）
+- PMAC 2.0.7 SDK（按平台选择）：`x86_64-pc-windows-msvc` 或 `aarch64-apple-darwin`，
+  包含 `include/`、`native/pmac.dll|libpmac.dylib`、`cmake/PmacConfig.cmake`
+- Rust 终端核心：`cargo build --release --lib` 生成
+  `pmac_terminal_core.dll`（Windows）/ `libpmac_terminal_core.dylib`（macOS）
 
-仓库不含上述预编译依赖。下载/构建后通过 CMake 参数指定：
+仓库不含 PMAC 预编译 SDK，从
+[SDK Releases](https://github.com/Sangmo467/communication-library-for-ppmac-rust/releases)
+下载对应包，解压到源码同级目录或通过 `-DPMAC_SDK_DIR=<路径>` 指定。
+Rust 终端核心源码已放在 `third_party/pmac-terminal-rs`，先构建一次：
+
+```powershell
+cargo build --release --lib --manifest-path third_party/pmac-terminal-rs/Cargo.toml
+```
+
+Windows 本地构建：
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
   -DCMAKE_PREFIX_PATH="C:/Qt/6.8.3/msvc2022_64" `
-  -DPMAC_SDK_DIR="D:/sdk/pmac-2.0.6-x86_64-pc-windows-msvc-release" `
-  -DPMACT_ROOT="D:/work/pmac-terminal-rs"
+  -DPMAC_SDK_DIR="D:/sdk/pmac-2.0.7-x86_64-pc-windows-msvc-release"
 
 cmake --build build --config Release
 ```
 
-- `PMAC_SDK_DIR`：PMAC 2.0.6 SDK 根目录（默认查找源码同级同名目录）。
-- `PMACT_ROOT`：`pmac-terminal-rs` 仓库/分发包根目录（默认 `../pmac-terminal-rs`），也可用 `PMACT_CORE_DLL` 单独指定核心 DLL。
+macOS（Apple Silicon）本地构建：
+
+```sh
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" \
+  -DPMAC_SDK_DIR="$PWD/pmac-2.0.7-aarch64-apple-darwin-release"
+cmake --build build --parallel
+```
+
+- `PMAC_SDK_DIR`：PMAC 2.0.7 SDK 根目录（默认按平台查找源码同级同名目录）。
+- `PMACT_ROOT`：Rust 终端核心源码目录（默认 `third_party/pmac-terminal-rs`），
+  也可用 `PMACT_CORE_LIB` 单独指定已编译的核心库。
+- macOS 构建自动运行 `macdeployqt`，产物为 `dist/PmacTerminalApp.app`。
 
 ## 输出
 
-- 构建后自动部署 Qt 运行库到构建目录，并通过 `package` 目标收集到 `dist/`。
+- Windows：自动部署 Qt 运行库到构建目录，并通过 `package` 目标收集到 `dist/`。
+- macOS：构建完成后得到自包含的 `dist/PmacTerminalApp.app`。
+
+## GitHub Actions 多平台构建
+
+推送 `main`/`master` 或手动触发 `.github/workflows/build.yml`，CI 会：
+
+1. 下载 PMAC 2.0.7 对应平台 SDK Release；
+2. 编译 `third_party/pmac-terminal-rs` 终端核心；
+3. 构建并部署应用，上传产物：
+   - `PmacTerminal-windows-x64`（`PmacTerminal-2.0.7-windows-x64.zip`）
+   - `PmacTerminal-macos-arm64`（`PmacTerminal-2.0.7-macos-arm64.zip`，内含 `.app`）
+
+macOS 产物未使用开发者证书签名（仅 ad-hoc）。首次运行若被 Gatekeeper 拦截，
+可右键“打开”，或执行 `xattr -dr com.apple.quarantine <app 路径>`。
+macOS 版暂不支持 Windows 的输入法自动切换（英文/中文），该选项在 macOS 上隐藏。
+
+## 单文件分发
+
+Release 构建完成后，使用本机已安装的 Enigma Virtual Box 控制台打包：
+
+```powershell
+powershell -NoProfile -File tools/package-singlefile.ps1
+```
+
+输出 `dist_single/PmacTerminalApp.exe`，分发时只需复制这个 EXE。
+包内包含 Qt、PMAC、Rust 终端核心、QML、翻译以及 MSVC x64 运行库。
+打包机需要安装 Enigma Virtual Box 与 Visual Studio 2022 的 x64 C++ 运行库分发文件；
+非默认安装路径可通过 `-EnigmaConsole`、`-CrtDir` 指定。
+脚本读取当前 `dist/`，每次更新程序或翻译后需重新构建并打包。
 
 ## 离线自检
 

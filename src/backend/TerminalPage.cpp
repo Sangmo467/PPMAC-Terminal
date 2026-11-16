@@ -1,7 +1,9 @@
 #include "TerminalPage.h"
 #include <QQuickWindow>
+#include <QScopeGuard>
 #include "TerminalWidgets.inc"
 #include "WatchPanel.h"
+
 
 namespace {
 // 至少保留一个终端：仅剩一页时隐藏其关闭按钮。
@@ -56,6 +58,8 @@ TerminalPage::TerminalPage(QQuickItem *parent) : QQuickItem(parent), d(std::make
                     static_cast<Terminal *>(d->tabs->currentWidget())
                         ->focusInput(Qt::ActiveWindowFocusReason);
                 }
+                if (d->tabs && d->tabs->currentWidget())
+                    static_cast<Terminal *>(d->tabs->currentWidget())->ensureEnglish();
             });
         }
         syncHost();
@@ -116,7 +120,7 @@ void TerminalPage::syncHost()
         d->host->setPalette(palette);
         d->host->setAutoFillBackground(true);
         d->host->setStyleSheet(
-            "QPushButton, QLabel, QCheckBox, QTabBar {font-family:'Microsoft YaHei UI'; font-size:16px; font-weight:600;}"
+            "QPushButton, QLabel, QCheckBox, QTabBar {font-family:'Microsoft YaHei UI','PingFang SC','Helvetica Neue',sans-serif; font-size:16px; font-weight:600;}"
             "QPushButton {background:#348bcd;color:#ffffff;border:0;border-radius:5px;padding:9px 12px;font-size:18px;font-weight:600;}"
             "QLabel {color:#f0f3f7;background:transparent;}"
             "QLabel#sharedConnectionHint {color:#ffffff;background:#262b33;border:1px solid #3a4150;border-radius:5px;padding:8px;}"
@@ -135,7 +139,7 @@ void TerminalPage::syncHost()
         auto layout = new QVBoxLayout(d->host.get());
         layout->setContentsMargins(8, 4, 8, 4);
         try {
-            d->api = std::make_unique<Api>(QCoreApplication::applicationDirPath() + "/pmac_terminal_core.dll");
+            d->api = std::make_unique<Api>(RuntimePaths::terminalCoreLibrary());
             auto row = new QHBoxLayout;
             d->addButton = new QPushButton;
             d->addButton->setObjectName("newTerminal");
@@ -237,6 +241,105 @@ int TerminalPage::smokeTest()
         }
     }
     auto command = static_cast<CommandEdit *>(input);
+    // A connection/busy transition calls setReadOnly through the base pointer.
+    // Auto English must still reject IME queries, preedit and commit events.
+    command->setAutoEnglish(true);
+    command->clear();
+    for (bool readOnly : {true, false, true, false}) {
+        input->setReadOnly(readOnly);
+        QInputMethodQueryEvent query(Qt::ImEnabled);
+        QApplication::sendEvent(command, &query);
+        if (query.value(Qt::ImEnabled).toBool()
+            || command->testAttribute(Qt::WA_InputMethodEnabled)) return 43;
+    }
+    QInputMethodEvent preedit(QStringLiteral("zhongwen"), {});
+    QApplication::sendEvent(command, &preedit);
+    if (!command->document()->firstBlock().layout()->preeditAreaText().isEmpty()) return 44;
+    QInputMethodEvent commit;
+    commit.setCommitString(QStringLiteral("中文"));
+    QApplication::sendEvent(command, &commit);
+    if (!command->toPlainText().isEmpty()) return 45;
+    command->setAutoEnglish(false);
+    QInputMethodEvent allowedCommit;
+    allowedCommit.setCommitString(QStringLiteral("中文"));
+    QApplication::sendEvent(command, &allowedCommit);
+    if (command->toPlainText() != QStringLiteral("中文")) return 46;
+    command->clear();
+    command->setAutoEnglish(true);
+    QKeyEvent ascii(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier, "a");
+    QApplication::sendEvent(command, &ascii);
+    if (command->toPlainText() != "a") return 47;
+    command->hideCompletion();
+    command->clear();
+    qInfo() << "Input method: editable transitions, preedit/commit suppression, opt-out and ASCII passed";
+#ifdef Q_OS_WIN
+    // Exercise actual Windows layouts and native focus in the embedded terminal.
+    {
+        command->setAutoEnglish(false);
+        const HKL originalLayout = GetKeyboardLayout(0);
+        const auto restoreLayout = qScopeGuard([&] {
+            command->setAutoEnglish(false);
+            ActivateKeyboardLayout(originalLayout, 0);
+            command->setAutoEnglish(true);
+        });
+        QList<HKL> layouts(GetKeyboardLayoutList(0, nullptr));
+        const int count = GetKeyboardLayoutList(layouts.size(), layouts.data());
+        HKL otherLayout = nullptr;
+        for (int i = 0; i < count; ++i) {
+            if (PRIMARYLANGID(LOWORD(reinterpret_cast<ULONG_PTR>(layouts[i]))) != LANG_ENGLISH) {
+                otherLayout = layouts[i];
+                break;
+            }
+        }
+        if (otherLayout) {
+            d->host->activateWindow();
+            SetFocus(reinterpret_cast<HWND>(d->host->winId()));
+            output->setFocus();
+            QApplication::processEvents();
+            if (!ActivateKeyboardLayout(otherLayout, 0)) return 34;
+            command->setAutoEnglish(true);
+            command->ensureEnglish();
+            // Reactivation while Watch/output owns focus must not force English.
+            if (GetKeyboardLayout(0) != otherLayout) return 35;
+            command->setFocus();
+            QApplication::processEvents();
+            if (!command->hasInputFocus() || !GetFocus() || !command->englishActive()) {
+                qWarning() << "Input layout focus failed:" << QGuiApplication::focusObject()
+                           << "layout" << reinterpret_cast<quintptr>(GetKeyboardLayout(0));
+                return 36;
+            }
+            if (QInputMethod::queryFocusObject(Qt::ImEnabled, {}).toBool()) return 48;
+            const HIMC context = ImmGetContext(GetFocus());
+            if (context) {
+                ImmReleaseContext(GetFocus(), context);
+                return 49;
+            }
+            // A manual layout change must invalidate the status immediately.
+            ActivateKeyboardLayout(otherLayout, 0);
+            if (command->englishActive()) return 37;
+            command->ensureEnglish();
+            if (!command->englishActive()) return 38;
+            command->setAutoEnglish(false);
+            if (GetKeyboardLayout(0) != otherLayout) return 39;
+            command->setAutoEnglish(true);
+            for (int i = 0; i < 5; ++i) {
+                output->setFocus();
+                if (GetKeyboardLayout(0) != otherLayout) return 40;
+                command->setFocus();
+            }
+            // Drain pending focus retries and native messages after rapid refocus.
+            QEventLoop settle;
+            QTimer::singleShot(200, &settle, &QEventLoop::quit);
+            settle.exec();
+            if (!command->englishActive()) return 41;
+            command->setAutoEnglish(false);
+            if (GetKeyboardLayout(0) != otherLayout) return 42;
+            qInfo() << "Input layout: focus, recheck, restore and rapid refocus passed";
+        } else {
+            qWarning() << "Input layout smoke skipped: no non-English layout is loaded";
+        }
+    }
+#endif
     command->setPlainText(QString::fromUtf8("前缀🙂=Mot"));
     command->moveCursor(QTextCursor::End);
     command->acceptCompletion("Motor[]");

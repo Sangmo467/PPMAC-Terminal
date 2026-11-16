@@ -32,9 +32,12 @@ int main(int argc, char *argv[])
 {
     set_qt_environment();
 
+    // Windows 嵌入原生 QWidget 时使用 OpenGL；macOS 保持默认 Metal 后端。
+#ifdef Q_OS_WIN
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+#endif
     QApplication app(argc, argv);
-    app.setWindowIcon(QIcon(u":/icons/PITBall.png"_qs));
+    app.setWindowIcon(QIcon(u":/icons/PmacTerminal.png"_qs));
 
     QQmlApplicationEngine engine;
     const QUrl url(u"qrc:Main/main.qml"_qs);

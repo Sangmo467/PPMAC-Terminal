@@ -16,6 +16,7 @@ CMakeCache.txt
 
 # 本地编辑器 / AI 设置
 /.claude/
+/.serena/
 /.vscode/
 /.idea/
 

@@ -7,14 +7,16 @@ class Terminal : public QWidget {
     bool pending = false;
     QString pendingId;
     QStringList queue;
-    QCheckBox *timing;
-    QPlainTextEdit *output;
-    CommandEdit *input;
-    QLabel *status;
+    QCheckBox *timing = nullptr;
+    QPlainTextEdit *output = nullptr;
+    CommandEdit *input = nullptr;
+    QLabel *status = nullptr;
     QPushButton *refreshButton = nullptr, *copyButton = nullptr, *clearButton = nullptr,
                 *exportButton = nullptr, *logButton = nullptr, *fontButton = nullptr, *printButton = nullptr;
     QCheckBox *english = nullptr;
+    QLabel *imeLabel = nullptr;
     QFile log;
+    HardwareConfig hardware;
     QList<QMetaObject::Connection> backendConnections;
     QString t(const char *key) const {
         return Tr::tr(backend ? backend->language() : QStringLiteral("en"), QString::fromLatin1(key));
@@ -40,7 +42,45 @@ class Terminal : public QWidget {
         english->setText(t("terminal.autoEnglish"));
         english->setToolTip(t("terminal.autoEnglishTip"));
         input->setPlaceholderText(t("terminal.placeholder"));
+        updateImeState();
         updateState();
+    }
+    void updateImeState() {
+        if (!imeLabel) return;
+#ifndef Q_OS_WIN
+        // 输入源自动切换仅实现于 Windows。
+        imeLabel->setVisible(false);
+        return;
+#endif
+        QString text = t("terminal.imeUnknown");
+        QString imeName;
+        QColor color("#6b7280");
+#ifdef Q_OS_WIN
+        if (input->hasInputFocus()) {
+            const HWND hwnd = GetFocus();
+            DWORD pid = 0, threadId = 0;
+            if (hwnd) threadId = GetWindowThreadProcessId(hwnd, &pid);
+            if (hwnd && pid == GetCurrentProcessId()) {
+                wchar_t description[256] = {};
+                const HKL layout = GetKeyboardLayout(threadId);
+                if (ImmGetDescription(layout, description, 255) > 0)
+                    imeName = QString::fromWCharArray(description).trimmed();
+                else if (ImmGetIMEFileName(layout, description, 255) > 0)
+                    imeName = QString::fromWCharArray(description).trimmed();
+                if (input->englishActive()) {
+                    text = t("terminal.imeEnglish");
+                    color = QColor("#7ee787");
+                } else {
+                    text = t("terminal.imeChinese");
+                    color = QColor("#ffb454");
+                }
+            }
+        }
+#endif
+        imeLabel->setText(imeName.isEmpty() ? text
+                                            : text + QStringLiteral(" · ") + imeName.left(24));
+        imeLabel->setToolTip(imeName);
+        imeLabel->setStyleSheet(QStringLiteral("color:%1;").arg(color.name()));
     }
     void updateState() {
         const bool connected = backend && backend->connectionState() == "connected";
@@ -59,6 +99,10 @@ class Terminal : public QWidget {
     void importSymbols() {
         input->completer.popup()->hide(); input->model.setStringList({}); input->help.clear();
         api.setSymbols(handle, reinterpret_cast<const uint8_t *>("[]"), 2);
+        hardware.setInstances(backend ? backend->terminalHardware() : QStringList(),
+                              backend ? backend->terminalHardwareRoots() : QStringList(),
+                              backend ? backend->terminalAliases() : QStringList(),
+                              backend && backend->terminalHardwareKnown());
         if (!backend || backend->connectionState() != "connected") return;
         const auto files = backend->terminalSymbols();
         if (files.isEmpty()) {
@@ -101,8 +145,9 @@ public:
     bool hasPendingRequest() const { return pending || !queue.isEmpty(); }
     void hideCompletion() { input->hideCompletion(); }
     void focusInput(Qt::FocusReason reason = Qt::OtherFocusReason) { input->setFocus(reason); }
+    void ensureEnglish() { input->ensureEnglish(); updateImeState(); }
     explicit Terminal(Api &api, Backend *connection, QWidget *parent = nullptr) : QWidget(parent), api(api) {
-        const auto path = (QCoreApplication::applicationDirPath() + "/pmac.dll").toUtf8();
+        const auto path = RuntimePaths::pmacLibrary().toUtf8();
         if (api.create(reinterpret_cast<const uint8_t *>(path.constData()), size_t(path.size()), &handle) != PMACT_OK)
             throw std::runtime_error("pmact_create failed");
         auto layout = new QVBoxLayout(this); layout->setContentsMargins(0, 8, 0, 0);
@@ -121,11 +166,14 @@ public:
         english = new QCheckBox;
         english->setObjectName("autoEnglish");
         english->setChecked(true);
+        imeLabel = new QLabel;
+        imeLabel->setObjectName("imeState");
         layout->addLayout(tools);
         // 复选框单独一行，终端变窄时不会被挤出右侧边框。
         auto *optionsRow = new QHBoxLayout;
         optionsRow->addWidget(timing);
         optionsRow->addWidget(english);
+        optionsRow->addWidget(imeLabel);
         optionsRow->addStretch();
         layout->addLayout(optionsRow);
         auto splitter = new QSplitter(Qt::Vertical);
@@ -134,7 +182,13 @@ public:
         output->setReadOnly(true); output->setMaximumBlockCount(20000);
         output->setFont(TerminalColors::terminalFont());
         input = new CommandEdit; input->setFont(output->font()); input->completer.popup()->setFont(output->font());
+        input->stateChanged = [this] { updateImeState(); };
         connect(english, &QCheckBox::toggled, input, &CommandEdit::setAutoEnglish);
+#ifndef Q_OS_WIN
+        // macOS/Linux 暂无输入源自动切换，关闭英文模式锁定以免阻断中文输入。
+        english->setChecked(false);
+        english->setVisible(false);
+#endif
         splitter->addWidget(output); splitter->addWidget(input); splitter->setSizes({520,130});
         layout->addWidget(splitter, 1);
         status = new QLabel; status->setTextFormat(Qt::PlainText);
@@ -169,10 +223,18 @@ public:
         input->submit = [this] { send(); };
         input->complete = [this](const QString &prefix) {
             QStringList choices; input->help.clear();
-            for (const auto &item : QJsonDocument::fromJson(candidates(prefix.toUtf8())).array()) {
-                const auto obj = item.toObject(); const auto name = obj.value("text").toString();
-                choices << name; input->help.insert(name, obj.value("help").toString());
+            const auto query = hardware.rewriteAlias(prefix);
+            for (const auto &item : QJsonDocument::fromJson(candidates(query.toUtf8())).array()) {
+                const auto obj = item.toObject();
+                const auto raw = obj.value("text").toString();
+                for (const auto &name : completionChoices(prefix, raw, &hardware)) {
+                    choices << name; input->help.insert(name, obj.value("help").toString());
+                }
             }
+            hardware.appendAliasInstances(prefix, &choices);
+            std::sort(choices.begin(), choices.end(), [](const QString &a, const QString &b) {
+                return a.compare(b, Qt::CaseInsensitive) < 0;
+            });
             return choices;
         };
         setBackend(connection);
@@ -214,5 +276,9 @@ public:
     int loadTestSymbols(const QByteArray &json) {
         return api.setSymbols(handle, reinterpret_cast<const uint8_t *>(json.constData()), size_t(json.size()));
     }
-    ~Terminal() override { if (handle) api.destroy(handle); }
+    ~Terminal() override {
+        // 子控件销毁会改变焦点；此时状态标签和 Terminal 成员可能已经释放。
+        if (input) input->stateChanged = {};
+        if (handle) api.destroy(handle);
+    }
 };

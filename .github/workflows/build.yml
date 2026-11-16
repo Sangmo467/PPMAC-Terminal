@@ -1,0 +1,121 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  QT_VERSION: "6.8.3"
+  PMAC_VERSION: "2.0.7"
+  PMAC_REPO: "Sangmo467/communication-library-for-ppmac-rust"
+  PMACT_ROOT: "${{ github.workspace }}/third_party/pmac-terminal-rs"
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: third_party/pmac-terminal-rs
+
+      - name: Download PMAC SDK
+        run: |
+          $name = "pmac-$env:PMAC_VERSION-x86_64-pc-windows-msvc-release"
+          Invoke-WebRequest -Uri "https://github.com/$env:PMAC_REPO/releases/download/v$env:PMAC_VERSION/$name.zip" -OutFile pmac.zip
+          Expand-Archive -Path pmac.zip -DestinationPath .
+
+      - name: Build Rust terminal core
+        run: cargo build --release --lib --locked --manifest-path third_party/pmac-terminal-rs/Cargo.toml
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
+            -DPMAC_SDK_DIR="$PWD/pmac-$env:PMAC_VERSION-x86_64-pc-windows-msvc-release" `
+            -DPMACT_ROOT="$env:PMACT_ROOT"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        run: Compress-Archive -Path dist/* -DestinationPath "PmacTerminal-$env:PMAC_VERSION-windows-x64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PmacTerminal-windows-x64
+          path: PmacTerminal-${{ env.PMAC_VERSION }}-windows-x64.zip
+          if-no-files-found: error
+
+  macos-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: clang_64
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: third_party/pmac-terminal-rs
+
+      - name: Download PMAC SDK
+        run: |
+          name="pmac-$PMAC_VERSION-aarch64-apple-darwin-release"
+          curl -fL -o pmac.zip "https://github.com/$PMAC_REPO/releases/download/v$PMAC_VERSION/$name.zip"
+          unzip -q pmac.zip
+
+      - name: Build Rust terminal core
+        run: cargo build --release --lib --locked --manifest-path third_party/pmac-terminal-rs/Cargo.toml
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DPMAC_SDK_DIR="$PWD/pmac-$PMAC_VERSION-aarch64-apple-darwin-release" \
+            -DPMACT_ROOT="$PMACT_ROOT"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      # arm64 macOS 要求可执行文件至少带 ad-hoc 签名；部署后重新签名整个 bundle。
+      - name: Ad-hoc sign
+        run: |
+          if [ -d dist/PmacTerminalApp.app ]; then
+            codesign --force --deep --sign - dist/PmacTerminalApp.app
+          fi
+
+      - name: Package
+        run: ditto -c -k --sequesterRsrc --keepParent dist/PmacTerminalApp.app "PmacTerminal-$PMAC_VERSION-macos-arm64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PmacTerminal-macos-arm64
+          path: PmacTerminal-${{ env.PMAC_VERSION }}-macos-arm64.zip
+          if-no-files-found: error
