@@ -110,12 +110,17 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      # arm64 macOS 要求可执行文件至少带 ad-hoc 签名；部署后重新签名整个 bundle。
-      - name: Ad-hoc sign
+      # 部署脚本已 ad-hoc 签名；复制到 dist 后再验证 bundle 和业务库。
+      - name: Verify and ad-hoc sign
         run: |
-          if [ -d dist/PmacTerminalApp.app ]; then
-            codesign --force --deep --sign - dist/PmacTerminalApp.app
-          fi
+          app="dist/PmacTerminalApp.app"
+          test -f "$app/Contents/Frameworks/libpmac.dylib"
+          test -f "$app/Contents/Frameworks/libpmac_terminal_core.dylib"
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          otool -L "$app/Contents/MacOS/PmacTerminalApp"
+          otool -D "$app/Contents/Frameworks/libpmac.dylib"
+          otool -D "$app/Contents/Frameworks/libpmac_terminal_core.dylib"
 
       - name: Package
         run: ditto -c -k --sequesterRsrc --keepParent dist/PmacTerminalApp.app "PmacTerminal-$PMAC_VERSION-macos-arm64.zip"

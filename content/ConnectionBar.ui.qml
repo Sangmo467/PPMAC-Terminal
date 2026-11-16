@@ -60,7 +60,7 @@ Rectangle {
         Text { text: LanguageManager.ipAddress; color: "#9aa3b2"; font.pixelSize: Constants.fontBody }
         AppTextField {
             id: ipField
-            Layout.preferredWidth: Math.round(170 * Constants.uiScale)
+            Layout.preferredWidth: Math.round(200 * Constants.uiScale)
             text: "192.168.0.200"
             placeholderText: "192.168.0.200"
             inputMethodHints: Qt.ImhFormattedNumbersOnly

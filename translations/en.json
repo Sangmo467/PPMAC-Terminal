@@ -138,6 +138,7 @@
   "terminal.timing": "Response time",
   "terminal.autoEnglish": "Auto English",
   "terminal.autoEnglishTip": "Try to switch to an installed English keyboard layout when the command box gains focus; restore on leave. Does not switch per key or alter pasted content.",
+  "terminal.autoEnglishTipMac": "On macOS, disable IME composition only in the command box for direct command input. The system input source is never switched or restored, so other apps are unaffected.",
   "terminal.imeEnglish": "Input: English",
   "terminal.imeChinese": "Input: Chinese",
   "terminal.imeUnknown": "Input: --",

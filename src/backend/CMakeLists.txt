@@ -54,9 +54,4 @@ endif()
 if(WIN32)
     target_link_libraries(PmacTerminalBackend PUBLIC user32 imm32)
 endif()
-# macOS 输入源切换（TIS）。
-if(APPLE)
-    find_library(CARBON_FRAMEWORK Carbon REQUIRED)
-    find_library(CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
-    target_link_libraries(PmacTerminalBackend PUBLIC ${CARBON_FRAMEWORK} ${CORE_FOUNDATION_FRAMEWORK})
-endif()
+# macOS 仅关闭命令框的 IME 组合输入，不切换系统输入源。

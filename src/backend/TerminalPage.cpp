@@ -51,15 +51,13 @@ TerminalPage::TerminalPage(QQuickItem *parent) : QQuickItem(parent), d(std::make
                     return;
                 }
                 if (!d->host->isVisible()) return;
-                d->host->activateWindow();
+                // 仅恢复此前原生终端的焦点，不从 QML 连接栏抢回键盘。
                 if (d->lastFocus && d->lastFocus->isVisible()) {
+                    d->host->activateWindow();
                     d->lastFocus->setFocus(Qt::ActiveWindowFocusReason);
-                } else if (d->tabs && d->tabs->currentWidget()) {
-                    static_cast<Terminal *>(d->tabs->currentWidget())
-                        ->focusInput(Qt::ActiveWindowFocusReason);
+                    if (d->tabs && d->tabs->currentWidget())
+                        static_cast<Terminal *>(d->tabs->currentWidget())->ensureEnglish();
                 }
-                if (d->tabs && d->tabs->currentWidget())
-                    static_cast<Terminal *>(d->tabs->currentWidget())->ensureEnglish();
             });
         }
         syncHost();

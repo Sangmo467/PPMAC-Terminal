@@ -138,6 +138,7 @@
   "terminal.timing": "Temps de réponse",
   "terminal.autoEnglish": "Anglais auto",
   "terminal.autoEnglishTip": "Tente de passer à une disposition de clavier anglaise installée lorsque la zone de commande reçoit le focus, puis restaure en la quittant. Ne change pas touche par touche et ne modifie pas le contenu collé.",
+  "terminal.autoEnglishTipMac": "Sous macOS, désactive uniquement la composition IME dans la zone de commande. La source d’entrée système n’est jamais modifiée ni restaurée, sans effet sur les autres applications.",
   "terminal.imeEnglish": "Saisie : anglais",
   "terminal.imeChinese": "Saisie : chinois",
   "terminal.imeUnknown": "Saisie : --",

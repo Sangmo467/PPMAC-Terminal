@@ -138,6 +138,7 @@
   "terminal.timing": "Antwortzeit",
   "terminal.autoEnglish": "Automatisch Englisch",
   "terminal.autoEnglishTip": "Beim Fokussieren des Befehlsfelds wird versucht, auf ein installiertes englisches Tastaturlayout zu wechseln; beim Verlassen wird es zurückgesetzt. Kein Wechsel pro Taste, kein Ändern eingefügter Inhalte.",
+  "terminal.autoEnglishTipMac": "Unter macOS wird nur die IME-Eingabe im Befehlsfeld deaktiviert. Die System-Eingabequelle wird weder umgeschaltet noch wiederhergestellt; andere Programme bleiben unberührt.",
   "terminal.imeEnglish": "Eingabe: Englisch",
   "terminal.imeChinese": "Eingabe: Chinesisch",
   "terminal.imeUnknown": "Eingabe: --",

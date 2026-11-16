@@ -138,6 +138,7 @@
   "terminal.timing": "応答時間",
   "terminal.autoEnglish": "自動英語",
   "terminal.autoEnglishTip": "コマンド欄がフォーカスを得たとき、インストール済みの英語キーボード配列への切り替えを試み、離れると元に戻します。キーごとの切り替えや貼り付け内容の変更は行いません。",
+  "terminal.autoEnglishTipMac": "macOS ではコマンド欄の IME 変換だけを無効にして直接入力します。システムの入力ソースは切り替えず、他のアプリにも影響しません。",
   "terminal.imeEnglish": "入力: 英語",
   "terminal.imeChinese": "入力: 中国語",
   "terminal.imeUnknown": "入力: --",

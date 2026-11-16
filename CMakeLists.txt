@@ -120,10 +120,12 @@ if (NOT PMACT_CORE_LIB OR NOT EXISTS "${PMACT_CORE_LIB}" OR NOT EXISTS "${PMACT_
         "Build the Rust terminal core first: cargo build --release --lib --manifest-path "
         "${PMACT_ROOT}/Cargo.toml, or set PMACT_ROOT / PMACT_CORE_LIB.")
 endif ()
-add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${PMACT_CORE_LIB}" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${_pmact_core_name}"
-)
+if (NOT APPLE)
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PMACT_CORE_LIB}" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${_pmact_core_name}"
+    )
+endif ()
 
 # PMAC 2.0.7 SDK（Windows MSVC x64 / macOS ARM64 / Linux x64）。仓库不包含预编译 SDK，
 # 需下载后放到源码同级目录，或通过 -DPMAC_SDK_DIR=<路径> 指定。
@@ -148,18 +150,22 @@ endif ()
 add_subdirectory(src/backend)
 
 # 部署 PMAC 运行库，随后由 package 收集到 dist。
-add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${PMAC_SDK_DIR}/${_pmac_native_lib}"
-        "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
-)
+if (NOT APPLE)
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PMAC_SDK_DIR}/${_pmac_native_lib}"
+            "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
+    )
+endif ()
 
 # 自动部署 Qt 运行时并清理非必要文件，构建完成即得到可直接运行的干净目录
 option(DEPLOY_SOFTWARE_OPENGL
        "Deploy opengl32sw.dll (20MB). Needed only on machines without a GPU / over plain RDP" OFF)
 option(DEPLOY_VC_REDIST
        "Deploy vc_redist.x64.exe (25MB). Needed only for PCs without the MSVC runtime installed" OFF)
-get_target_property(WINDEPLOYQT_EXE Qt6::windeployqt IMPORTED_LOCATION)
+if (WIN32)
+    get_target_property(WINDEPLOYQT_EXE Qt6::windeployqt IMPORTED_LOCATION)
+endif ()
 if (WIN32 AND WINDEPLOYQT_EXE)
     # --no-system-d3d-compiler 不带 D3Dcompiler_47.dll（4MB，Basic 样式用预编译着色器，不需要）
     # --no-system-dxc-compiler 不带 dxcompiler/dxil
@@ -270,7 +276,7 @@ if (WIN32 AND WINDEPLOYQT_EXE)
     endif ()
 endif ()
 
-# macOS：部署 Qt 框架与 QML 模块，生成可直接分发的 .app
+# macOS：业务库放入 Frameworks，再部署 Qt、修正依赖并验证签名。
 if (APPLE)
     get_target_property(_qt_qmake Qt6::qmake IMPORTED_LOCATION)
     get_filename_component(_qt_bin_dir "${_qt_qmake}" DIRECTORY)
@@ -279,11 +285,15 @@ if (APPLE)
         message(FATAL_ERROR "macdeployqt not found. Check CMAKE_PREFIX_PATH / Qt installation.")
     endif ()
     add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-        COMMAND "${MACDEPLOYQT_EXE}"
-                "$<TARGET_BUNDLE_DIR:${CMAKE_PROJECT_NAME}>"
-                -qmldir=${CMAKE_CURRENT_SOURCE_DIR}/content
-                -always-overwrite
-        COMMENT "Deploying Qt runtime into the .app bundle"
+        COMMAND ${CMAKE_COMMAND}
+                "-DAPP_BUNDLE=$<TARGET_BUNDLE_DIR:${CMAKE_PROJECT_NAME}>"
+                "-DAPP_EXECUTABLE=$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
+                "-DQML_DIR=${CMAKE_CURRENT_SOURCE_DIR}/content"
+                "-DPMAC_LIBRARY=${PMAC_SDK_DIR}/${_pmac_native_lib}"
+                "-DTERMINAL_CORE_LIBRARY=${PMACT_CORE_LIB}"
+                "-DMACDEPLOYQT=${MACDEPLOYQT_EXE}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/macos-deploy.cmake"
+        COMMENT "Deploying and verifying the macOS app bundle"
     )
 endif ()
 
@@ -333,13 +343,13 @@ if (WIN32)
     target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE dwmapi)
 endif()
 
-# macOS：libpmac.dylib / Rust 核心与可执行文件同目录，用 @executable_path 定位。
+# macOS：libpmac.dylib / Rust 核心位于 Contents/Frameworks。
 if (APPLE)
     get_target_property(_qt_core_location Qt6::Core IMPORTED_LOCATION_RELEASE)
     get_filename_component(_qt_lib_dir "${_qt_core_location}" DIRECTORY)
     set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
-        BUILD_RPATH "@executable_path;${_qt_lib_dir}"
-        INSTALL_RPATH "@executable_path")
+        BUILD_RPATH "@executable_path/../Frameworks;${_qt_lib_dir}"
+        INSTALL_RPATH "@executable_path/../Frameworks")
 endif()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/qmlmodules)

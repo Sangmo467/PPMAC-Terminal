@@ -87,8 +87,10 @@ cmake --build build --parallel
 
 macOS 产物未使用开发者证书签名（仅 ad-hoc）。首次运行若被 Gatekeeper 拦截，
 可右键“打开”，或执行 `xattr -dr com.apple.quarantine <app 路径>`。
-macOS 版通过 Carbon TIS 实现与 Windows 相同的输入源自动切换：聚焦命令输入框切到
-ABC/US 英文输入源，离开时恢复原输入法；状态栏显示当前输入源。
+macOS 版只关闭命令框的 IME 组合输入，不通过 Carbon TIS 切换或恢复系统输入源，
+避免多标签焦点事件互相竞争并影响其他程序。Windows 仍保留原有英文布局自动切换。
+macOS 的 `libpmac.dylib` 与 `libpmac_terminal_core.dylib` 均位于
+`PmacTerminalApp.app/Contents/Frameworks`，构建末尾会执行 `codesign --verify`。
 
 ## 单文件分发
 

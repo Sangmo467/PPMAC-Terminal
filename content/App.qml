@@ -9,8 +9,8 @@ Window {
     // 默认尺寸不超过屏幕可用区域
     width: Math.min(Constants.width, Screen.width - 80)
     height: Math.min(Constants.height, Screen.height - 120)
-    minimumWidth: 1100
-    minimumHeight: 680
+    minimumWidth: Math.min(1100, Screen.width)
+    minimumHeight: Math.min(680, Screen.height - 40)
 
     visible: true
     title: "PMAC Terminal"

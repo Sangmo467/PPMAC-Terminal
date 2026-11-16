@@ -138,6 +138,7 @@
   "terminal.timing": "回應時間",
   "terminal.autoEnglish": "自動英文",
   "terminal.autoEnglishTip": "進入命令框時嘗試切換英文；離開時恢復。不強制逐鍵切換，不改變貼上內容。",
+  "terminal.autoEnglishTipMac": "macOS 下僅關閉命令框的輸入法組合輸入，直接輸入命令；不切換或恢復系統輸入來源，不影響其他程式。",
   "terminal.imeEnglish": "輸入法: 英文",
   "terminal.imeChinese": "輸入法: 中文",
   "terminal.imeUnknown": "輸入法: --",

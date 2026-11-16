@@ -40,22 +40,24 @@ class Terminal : public QWidget {
         printButton->setText(t("terminal.print"));
         timing->setText(t("terminal.timing"));
         english->setText(t("terminal.autoEnglish"));
+#ifdef Q_OS_MACOS
+        english->setToolTip(t("terminal.autoEnglishTipMac"));
+#else
         english->setToolTip(t("terminal.autoEnglishTip"));
+#endif
         input->setPlaceholderText(t("terminal.placeholder"));
         updateImeState();
         updateState();
     }
     void updateImeState() {
         if (!imeLabel) return;
-#if !defined(Q_OS_WIN) && !defined(Q_OS_MACOS)
-        // 输入源自动切换仅实现于 Windows / macOS。
+#ifndef Q_OS_WIN
         imeLabel->setVisible(false);
         return;
-#endif
+#else
         QString text = t("terminal.imeUnknown");
         QString imeName;
         QColor color("#6b7280");
-#ifdef Q_OS_WIN
         if (input->hasInputFocus()) {
             const HWND hwnd = GetFocus();
             DWORD pid = 0, threadId = 0;
@@ -76,23 +78,11 @@ class Terminal : public QWidget {
                 }
             }
         }
-#endif
-#if defined(Q_OS_MACOS)
-        if (input->hasInputFocus()) {
-            imeName = input->inputSourceName();
-            if (input->englishActive()) {
-                text = t("terminal.imeEnglish");
-                color = QColor("#7ee787");
-            } else {
-                text = t("terminal.imeChinese");
-                color = QColor("#ffb454");
-            }
-        }
-#endif
         imeLabel->setText(imeName.isEmpty() ? text
                                             : text + QStringLiteral(" · ") + imeName.left(24));
         imeLabel->setToolTip(imeName);
         imeLabel->setStyleSheet(QStringLiteral("color:%1;").arg(color.name()));
+#endif
     }
     void updateState() {
         const bool connected = backend && backend->connectionState() == "connected";

@@ -23,10 +23,6 @@
 #pragma comment(lib, "imm32.lib")
 #endif
 #endif
-#ifdef Q_OS_MACOS
-// 输入源切换（Text Input Source Services）。
-#include <Carbon/Carbon.h>
-#endif
 namespace TerminalColors {
 const QColor background("#000080"), response("#ffffff"), inputBackground("#ffffff"),
     inputText("#000000"), message("#ffff00"), error("#ff0000");
@@ -301,97 +297,9 @@ class CommandEdit:public QPlainTextEdit {
         if (layout && isEnglishLayout(GetKeyboardLayout(0))) applyLayout(layout);
     }
 #endif
-#ifdef Q_OS_MACOS
-    TISInputSourceRef previousSource = nullptr;
-
-    static bool isEnglishSource(TISInputSourceRef source) {
-        if (!source) return false;
-        // 中文/日文输入法属于 InputMode，不能仅凭 ASCIICapable 判为英文。
-        const auto type = TISGetInputSourceProperty(source, kTISPropertyInputSourceType);
-        if (!type || CFGetTypeID(type) != CFStringGetTypeID()
-            || CFStringCompare(static_cast<CFStringRef>(type), kTISTypeKeyboardLayout, 0)
-                   != kCFCompareEqualTo)
-            return false;
-        const auto languages = TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages);
-        if (languages && CFGetTypeID(languages) == CFArrayGetTypeID()) {
-            const auto array = static_cast<CFArrayRef>(languages);
-            for (CFIndex i = 0; i < CFArrayGetCount(array); ++i) {
-                const auto value = CFArrayGetValueAtIndex(array, i);
-                if (value && CFGetTypeID(value) == CFStringGetTypeID()
-                    && CFStringCompare(static_cast<CFStringRef>(value), CFSTR("en"), 0)
-                           == kCFCompareEqualTo)
-                    return true;
-            }
-        }
-        const auto capable = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsASCIICapable);
-        return capable && CFGetTypeID(capable) == CFBooleanGetTypeID()
-            && CFBooleanGetValue(static_cast<CFBooleanRef>(capable));
-    }
-    static QString sourceId(TISInputSourceRef source) {
-        if (!source) return {};
-        const auto value = TISGetInputSourceProperty(source, kTISPropertyInputSourceID);
-        return value && CFGetTypeID(value) == CFStringGetTypeID()
-            ? QString::fromCFString(static_cast<CFStringRef>(value)) : QString();
-    }
-    static QString sourceName(TISInputSourceRef source) {
-        if (!source) return {};
-        const auto value = TISGetInputSourceProperty(source, kTISPropertyLocalizedName);
-        return value && CFGetTypeID(value) == CFStringGetTypeID()
-            ? QString::fromCFString(static_cast<CFStringRef>(value)) : QString();
-    }
-    // 优先选区布局 ABC，其次 U.S.。返回值由静态缓存持有，调用方无需释放。
-    static TISInputSourceRef englishSource() {
-        static TISInputSourceRef cached = nullptr;
-        if (cached) return cached;
-        const void *keys[] = { kTISPropertyInputSourceType, kTISPropertyInputSourceIsASCIICapable,
-                               kTISPropertyInputSourceIsEnabled };
-        const void *values[] = { kTISTypeKeyboardLayout, kCFBooleanTrue, kCFBooleanTrue };
-        CFDictionaryRef filter = CFDictionaryCreate(nullptr, keys, values, 3,
-            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-        if (!filter) return nullptr;
-        CFArrayRef list = TISCreateInputSourceList(filter, false);
-        CFRelease(filter);
-        if (!list) return nullptr;
-        const CFIndex count = CFArrayGetCount(list);
-        for (const auto &preferred : { QStringLiteral("com.apple.keylayout.ABC"),
-                                       QStringLiteral("com.apple.keylayout.US") }) {
-            for (CFIndex i = 0; i < count && !cached; ++i) {
-                auto *source = static_cast<TISInputSourceRef>(
-                    const_cast<void *>(CFArrayGetValueAtIndex(list, i)));
-                if (sourceId(source) == preferred) {
-                    CFRetain(source);
-                    cached = source;
-                }
-            }
-            if (cached) break;
-        }
-        CFRelease(list);
-        return cached;
-    }
-    void preferEnglish() {
-        if (!autoEnglish || !hasInputFocus()) return;
-        TISInputSourceRef current = TISCopyCurrentKeyboardInputSource();
-        if (!current) return;
-        if (isEnglishSource(current)) { CFRelease(current); return; }
-        if (!previousSource) previousSource = current;
-        else CFRelease(current);
-        if (TISInputSourceRef english = englishSource()) TISSelectInputSource(english);
-    }
-    void restoreInputMode() {
-        const TISInputSourceRef layout = previousSource;
-        previousSource = nullptr;
-        if (!layout) return;
-        TISInputSourceRef current = TISCopyCurrentKeyboardInputSource();
-        const bool english = isEnglishSource(current);
-        if (current) CFRelease(current);
-        // 保留用户在输入期间主动选择的其他输入法。
-        if (english) TISSelectInputSource(layout);
-        CFRelease(layout);
-    }
-#endif
 public:
     ~CommandEdit() override {
-#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+#ifdef Q_OS_WIN
         QObject::disconnect(qGuiApp, nullptr, this, nullptr);
         restoreInputMode();
 #endif
@@ -399,16 +307,15 @@ public:
     void setAutoEnglish(bool enabled) {
         autoEnglish = enabled;
         syncInputMethodPolicy();
-#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+#ifdef Q_OS_WIN
         if (!enabled) restoreInputMode();
         else if (hasInputFocus()) preferEnglish();
 #endif
         if (stateChanged) stateChanged();
     }
-    // 窗口重新激活或焦点未重新触发时，补一次英文布局切换。
     void ensureEnglish() {
         syncInputMethodPolicy();
-#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+#ifdef Q_OS_WIN
         if (!autoEnglish) return;
         preferEnglish();
         if (stateChanged) stateChanged();
@@ -426,23 +333,8 @@ public:
     bool englishActive() const {
 #ifdef Q_OS_WIN
         return isEnglishLayout(GetKeyboardLayout(0));
-#elif defined(Q_OS_MACOS)
-        TISInputSourceRef current = TISCopyCurrentKeyboardInputSource();
-        const bool english = isEnglishSource(current);
-        if (current) CFRelease(current);
-        return english;
 #else
         return false;
-#endif
-    }
-    QString inputSourceName() const {
-#ifdef Q_OS_MACOS
-        TISInputSourceRef current = TISCopyCurrentKeyboardInputSource();
-        const QString name = sourceName(current);
-        if (current) CFRelease(current);
-        return name;
-#else
-        return {};
 #endif
     }
     QVariant inputMethodQuery(Qt::InputMethodQuery query) const override {
@@ -461,7 +353,7 @@ public:
     explicit CommandEdit(QWidget* parent=nullptr):QPlainTextEdit(parent),completer(&model,this) {
         setObjectName("commandInput");
         syncInputMethodPolicy();
-#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+#ifdef Q_OS_WIN
         // 嵌入 QQuickWindow 后 QApplication::focusWidget()/hasFocus() 可能为空，
         // 实际键盘接收者由 QGuiApplication::focusObject() 给出。
         connect(qGuiApp, &QGuiApplication::focusObjectChanged, this, [this](QObject *object) {
@@ -530,12 +422,12 @@ protected:
     }
     void focusInEvent(QFocusEvent *event) override {
         QPlainTextEdit::focusInEvent(event);
-#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+#ifdef Q_OS_WIN
         ensureEnglish();
 #endif
     }
     void focusOutEvent(QFocusEvent *event) override {
-#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+#ifdef Q_OS_WIN
         if (event->reason() != Qt::PopupFocusReason) restoreInputMode();
         if (stateChanged) stateChanged();
 #endif
@@ -551,7 +443,7 @@ protected:
         return QPlainTextEdit::eventFilter(object,event);
     }
     void keyPressEvent(QKeyEvent* e)override {
-#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+#ifdef Q_OS_WIN
         // 焦点可能被原生宿主窗口吞掉，按键时核验真实布局。
         preferEnglish();
 #endif

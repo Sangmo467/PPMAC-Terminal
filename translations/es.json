@@ -138,6 +138,7 @@
   "terminal.timing": "Tiempo de respuesta",
   "terminal.autoEnglish": "Inglés automático",
   "terminal.autoEnglishTip": "Intenta cambiar a una distribución de teclado inglesa instalada al enfocar la caja de comandos; la restaura al salir. No cambia por tecla ni altera el contenido pegado.",
+  "terminal.autoEnglishTipMac": "En macOS, solo desactiva la composición IME en el cuadro de comandos para escribir directamente. No cambia ni restaura la fuente de entrada del sistema ni afecta a otras aplicaciones.",
   "terminal.imeEnglish": "Entrada: inglés",
   "terminal.imeChinese": "Entrada: chino",
   "terminal.imeUnknown": "Entrada: --",
