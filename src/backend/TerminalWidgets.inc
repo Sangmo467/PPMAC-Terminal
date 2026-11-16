@@ -47,8 +47,8 @@ class Terminal : public QWidget {
     }
     void updateImeState() {
         if (!imeLabel) return;
-#ifndef Q_OS_WIN
-        // 输入源自动切换仅实现于 Windows。
+#if !defined(Q_OS_WIN) && !defined(Q_OS_MACOS)
+        // 输入源自动切换仅实现于 Windows / macOS。
         imeLabel->setVisible(false);
         return;
 #endif
@@ -74,6 +74,18 @@ class Terminal : public QWidget {
                     text = t("terminal.imeChinese");
                     color = QColor("#ffb454");
                 }
+            }
+        }
+#endif
+#if defined(Q_OS_MACOS)
+        if (input->hasInputFocus()) {
+            imeName = input->inputSourceName();
+            if (input->englishActive()) {
+                text = t("terminal.imeEnglish");
+                color = QColor("#7ee787");
+            } else {
+                text = t("terminal.imeChinese");
+                color = QColor("#ffb454");
             }
         }
 #endif
@@ -184,8 +196,8 @@ public:
         input = new CommandEdit; input->setFont(output->font()); input->completer.popup()->setFont(output->font());
         input->stateChanged = [this] { updateImeState(); };
         connect(english, &QCheckBox::toggled, input, &CommandEdit::setAutoEnglish);
-#ifndef Q_OS_WIN
-        // macOS/Linux 暂无输入源自动切换，关闭英文模式锁定以免阻断中文输入。
+#if !defined(Q_OS_WIN) && !defined(Q_OS_MACOS)
+        // Linux 暂无输入源自动切换，关闭英文模式锁定以免阻断中文输入。
         english->setChecked(false);
         english->setVisible(false);
 #endif

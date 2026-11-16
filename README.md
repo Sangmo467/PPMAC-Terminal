@@ -87,7 +87,8 @@ cmake --build build --parallel
 
 macOS 产物未使用开发者证书签名（仅 ad-hoc）。首次运行若被 Gatekeeper 拦截，
 可右键“打开”，或执行 `xattr -dr com.apple.quarantine <app 路径>`。
-macOS 版暂不支持 Windows 的输入法自动切换（英文/中文），该选项在 macOS 上隐藏。
+macOS 版通过 Carbon TIS 实现与 Windows 相同的输入源自动切换：聚焦命令输入框切到
+ABC/US 英文输入源，离开时恢复原输入法；状态栏显示当前输入源。
 
 ## 单文件分发
 
