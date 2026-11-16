@@ -9,6 +9,7 @@ permissions:
   contents: read
 
 env:
+  APP_VERSION: "1.0.0"
   QT_VERSION: "6.8.3"
   QT_VERSION_MACOS: "6.9.2"
   PMAC_VERSION: "2.0.7"
@@ -63,12 +64,12 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Package
-        run: Compress-Archive -Path dist/* -DestinationPath "PmacTerminal-$env:PMAC_VERSION-windows-x64.zip"
+        run: Compress-Archive -Path dist/* -DestinationPath "PmacTerminal-$env:APP_VERSION-windows-x64.zip"
 
       - uses: actions/upload-artifact@v4
         with:
           name: PmacTerminal-windows-x64
-          path: PmacTerminal-${{ env.PMAC_VERSION }}-windows-x64.zip
+          path: PmacTerminal-${{ env.APP_VERSION }}-windows-x64.zip
           if-no-files-found: error
 
   macos-arm64:
@@ -145,10 +146,10 @@ jobs:
           otool -D "$app/Contents/Frameworks/libpmac_terminal_core.dylib"
 
       - name: Package
-        run: ditto -c -k --sequesterRsrc --keepParent dist/PmacTerminalApp.app "PmacTerminal-$PMAC_VERSION-macos-arm64.zip"
+        run: ditto -c -k --sequesterRsrc --keepParent dist/PmacTerminalApp.app "PmacTerminal-$APP_VERSION-macos-arm64.zip"
 
       - uses: actions/upload-artifact@v4
         with:
           name: PmacTerminal-macos-arm64
-          path: PmacTerminal-${{ env.PMAC_VERSION }}-macos-arm64.zip
+          path: PmacTerminal-${{ env.APP_VERSION }}-macos-arm64.zip
           if-no-files-found: error
