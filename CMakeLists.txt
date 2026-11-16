@@ -179,12 +179,10 @@ if (WIN32 AND WINDEPLOYQT_EXE)
         COMMAND ${WINDEPLOYQT_EXE}
                 $<IF:$<CONFIG:Debug>,--debug,--release>
                 --no-translations
-                --no-virtualkeyboard
                 ${_NO_OPENGL_SW}
                 ${_NO_VC_REDIST}
                 --no-system-d3d-compiler
                 --no-system-dxc-compiler
-                --no-ffmpeg
                 --skip-plugin-types qmltooling,generic,networkinformation,tls,iconengines,imageformats,platforminputcontexts
                 --qmldir ${CMAKE_CURRENT_SOURCE_DIR}/content
                 $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
@@ -196,6 +194,7 @@ if (WIN32 AND WINDEPLOYQT_EXE)
         COMMAND ${CMAKE_COMMAND} -E rm -f
                 $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/dxcompiler.dll
                 $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/dxil.dll
+                $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/D3Dcompiler_47.dll
                 $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/Qt6VirtualKeyboard.dll
                 $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/Qt6Svg.dll
                 $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/Qt6QuickShapes.dll
@@ -256,6 +255,19 @@ if (WIN32 AND WINDEPLOYQT_EXE)
                 $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/qml/QtQuick/Window/plugins.qmltypes
                 $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/qml/QtQuick/Window/quickwindow.qmltypes
     )
+    # 旧版 windeployqt 可能不认识 --no-opengl-sw / --no-compiler-runtime，统一部署后清理。
+    if (NOT DEPLOY_SOFTWARE_OPENGL)
+        add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E rm -f
+                    $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/opengl32sw.dll
+        )
+    endif ()
+    if (NOT DEPLOY_VC_REDIST)
+        add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E rm -f
+                    $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/vc_redist.x64.exe
+        )
+    endif ()
 endif ()
 
 # macOS：部署 Qt 框架与 QML 模块，生成可直接分发的 .app

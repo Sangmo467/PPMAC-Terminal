@@ -306,9 +306,26 @@ class CommandEdit:public QPlainTextEdit {
 
     static bool isEnglishSource(TISInputSourceRef source) {
         if (!source) return false;
-        const auto value = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsASCIICapable);
-        return value && CFGetTypeID(value) == CFBooleanGetTypeID()
-            && CFBooleanGetValue(static_cast<CFBooleanRef>(value));
+        // 中文/日文输入法属于 InputMode，不能仅凭 ASCIICapable 判为英文。
+        const auto type = TISGetInputSourceProperty(source, kTISPropertyInputSourceType);
+        if (!type || CFGetTypeID(type) != CFStringGetTypeID()
+            || CFStringCompare(static_cast<CFStringRef>(type), kTISTypeKeyboardLayout, 0)
+                   != kCFCompareEqualTo)
+            return false;
+        const auto languages = TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages);
+        if (languages && CFGetTypeID(languages) == CFArrayGetTypeID()) {
+            const auto array = static_cast<CFArrayRef>(languages);
+            for (CFIndex i = 0; i < CFArrayGetCount(array); ++i) {
+                const auto value = CFArrayGetValueAtIndex(array, i);
+                if (value && CFGetTypeID(value) == CFStringGetTypeID()
+                    && CFStringCompare(static_cast<CFStringRef>(value), CFSTR("en"), 0)
+                           == kCFCompareEqualTo)
+                    return true;
+            }
+        }
+        const auto capable = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsASCIICapable);
+        return capable && CFGetTypeID(capable) == CFBooleanGetTypeID()
+            && CFBooleanGetValue(static_cast<CFBooleanRef>(capable));
     }
     static QString sourceId(TISInputSourceRef source) {
         if (!source) return {};
