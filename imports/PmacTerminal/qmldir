@@ -1,0 +1,3 @@
+Module PmacTerminal
+singleton Constants 1.0 Constants.qml
+singleton LanguageManager 1.0 LanguageManager.qml

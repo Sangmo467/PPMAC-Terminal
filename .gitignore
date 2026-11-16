@@ -1,0 +1,25 @@
+# 构建产物
+/build/
+/dist/
+/dist_single/
+/out/
+CMakeFiles/
+CMakeCache.txt
+
+# 编译好的 SDK / 第三方二进制，不随源码发布
+/pmac-*/
+
+# Qt Creator / Qt Design Studio 本地状态
+/.qtcreator/
+*.user
+*.qtds
+
+# 本地编辑器 / AI 设置
+/.claude/
+/.vscode/
+/.idea/
+
+# 系统与日志文件
+Thumbs.db
+.DS_Store
+*.log
