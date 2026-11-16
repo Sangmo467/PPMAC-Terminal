@@ -121,6 +121,15 @@ jobs:
             cat macos-build.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r line; do
+            case "$line" in
+              *"error:"*|*"CMake Error"*|*"FAILED:"*|*"clang:"*|*"ld:"*|*"codesign"*|*"install_name_tool"*)
+                line=${line//'%'/'%25'}
+                line=${line//$'\r'/'%0D'}
+                echo "::error::$line"
+                ;;
+            esac
+          done < macos-build.log
 
       # 部署脚本已 ad-hoc 签名；复制到 dist 后再验证 bundle 和业务库。
       - name: Verify and ad-hoc sign
