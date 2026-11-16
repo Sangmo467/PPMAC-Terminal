@@ -16,12 +16,17 @@ env:
 
 jobs:
   windows-x64:
-    runs-on: windows-latest
+    runs-on: windows-2022
     defaults:
       run:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -47,13 +52,14 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
             -DPMAC_SDK_DIR="$PWD/pmac-$env:PMAC_VERSION-x86_64-pc-windows-msvc-release" `
             -DPMACT_ROOT="$env:PMACT_ROOT"
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --parallel
 
       - name: Package
         run: Compress-Archive -Path dist/* -DestinationPath "PmacTerminal-$env:PMAC_VERSION-windows-x64.zip"
