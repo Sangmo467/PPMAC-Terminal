@@ -108,7 +108,19 @@ jobs:
             -DPMACT_ROOT="$PMACT_ROOT"
 
       - name: Build
-        run: cmake --build build --parallel
+        run: |
+          set -o pipefail
+          cmake --build build --parallel 2>&1 | tee macos-build.log
+
+      - name: Publish build log on failure
+        if: failure()
+        run: |
+          {
+            echo '## macOS build log'
+            echo '```text'
+            cat macos-build.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # 部署脚本已 ad-hoc 签名；复制到 dist 后再验证 bundle 和业务库。
       - name: Verify and ad-hoc sign
