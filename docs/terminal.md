@@ -48,12 +48,12 @@ Ctrl+C 遵循文本复制行为。
 终端与候选默认 14pt 半粗体，字体按钮同步调整输入、响应及候选。按钮采用 18px 半粗体，标签/状态采用 16px 半粗体；共享连接提示显式白字深灰底。候选项使用专用绘制器，编辑器持有焦点时仍保持选中项蓝底白字。
 响应时间默认关闭；保留复制、清空、UTF-8 导出、日志、字体和打印。
 
-macOS 顶层使用 QWidget，以 QQuickWidget 承载 QML 连接栏；终端与 Watch 作为同一顶层的普通
+Windows/macOS 顶层使用 QWidget，以 QQuickWidget 承载 QML 连接栏；终端与 Watch 作为同一顶层的普通
 QWidget 子控件。Cocoa 对嵌套 QWidgetWindow 的普通按键会选择最外层 QWindow，故不能将终端的
 QWidgetWindow 直接挂到 QQuickWindow 下，否则按键可能进入用户名/密码/IP 而无法进入终端或 Watch。
 统一 QWidget 顶层后，QQuickWidget 负责 QML 与 QWidget 之间的焦点和输入法交接，不对离屏 QQuickWindow
 执行自定义的窗口激活恢复。宿主的可见性、几何位置依据 renderWindowFor 返回的实际 QWidget 和偏移计算。
-Windows 正常界面仍使用原生子窗口；主窗口重新激活时只恢复此前终端持有的焦点。
+Windows 正常启动也使用同一宿主，切换其他窗口再返回时由 QWidget 恢复焦点，不运行旧的原生子窗口激活逻辑。
 恢复目标由真实 focusObjectChanged 通知记录，连接栏获得焦点时清除，不使用历史 focusWidget() 推断。
 Windows 下 QWidget::hasFocus() 可能与实际接收按键的控件不同步，输入法切换同时跟踪
 QGuiApplication::focusObjectChanged。“自动英文”默认启用：命令框获得焦点、窗口重新激活
@@ -87,7 +87,7 @@ TerminalWidgets.inc 从上游 Qt 编辑器适配，收发改为共享 Backend。
 macOS：dist/PmacTerminalApp.app/Contents/MacOS/PmacTerminalApp --terminal-smoke
 自检覆盖 IME 可编辑状态变化、组合/提交、组合期间回车/Tab/方向键，以及组合结束后的命令发送。
 另外覆盖 Watch 大整数/负数/非有限值格式化，以及 QML/终端焦点通知与隐藏恢复场景。
-`--terminal-focus-smoke` 使用 QWidget 宿主（Windows 需加 `--widget-shell`），向顶层窗口派发点击和按键，
+`--terminal-focus-smoke` 使用正式的 QWidget 宿主，向顶层窗口派发点击和按键，并切换到独立窗口再返回，
 共 15 轮验证用户名/密码/IP → 终端 → Watch 编辑器 → 连接栏的真实控件输入路由，并检查平台默认 IP。
 检查蓝色响应区、响应时间默认关闭、共享 Backend 绑定、
 真实 Rust 符号导入、Enter/Tab 补全、数组光标、历史、复制、清空与标签生命周期。

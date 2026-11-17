@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  APP_VERSION: "1.0.2"
+  APP_VERSION: "1.0.3"
   QT_VERSION: "6.8.3"
   QT_VERSION_MACOS: "6.9.2"
   PMAC_VERSION: "2.0.7"
@@ -79,7 +79,7 @@ jobs:
         env:
           QT_FORCE_STDERR_LOGGING: "1"
         run: |
-          $test = Start-Process -FilePath "$PWD/dist/PmacTerminalApp.exe" -ArgumentList '--widget-shell','--terminal-focus-smoke' -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput build/focus.out.log -RedirectStandardError build/focus.err.log
+          $test = Start-Process -FilePath "$PWD/dist/PmacTerminalApp.exe" -ArgumentList '--terminal-focus-smoke' -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput build/focus.out.log -RedirectStandardError build/focus.err.log
           Get-Content -Encoding UTF8 build/focus.out.log
           Get-Content -Encoding UTF8 build/focus.err.log
           exit $test.ExitCode

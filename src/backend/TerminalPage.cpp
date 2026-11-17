@@ -651,6 +651,21 @@ int TerminalPage::focusSmokeTest()
         QApplication::sendEvent(nativeWindow, &release);
         QApplication::processEvents();
     };
+    QWidget otherWindow;
+    QLineEdit otherInput(&otherWindow);
+    otherWindow.resize(240, 80);
+    const auto leaveAndReturn = [&] {
+        auto *previous = QApplication::focusWidget();
+        otherWindow.show();
+        otherWindow.activateWindow();
+        otherInput.setFocus();
+        QApplication::processEvents();
+        shell->activateWindow();
+        QApplication::processEvents();
+        otherWindow.hide();
+        QApplication::processEvents();
+        return QApplication::focusWidget() == previous;
+    };
     QPoint renderOffset;
     QQuickRenderControl::renderWindowFor(window(), &renderOffset);
     for (int cycle = 0; cycle < 5; ++cycle) for (auto *field : fields) {
@@ -659,6 +674,7 @@ int TerminalPage::focusSmokeTest()
         field->setProperty("text", QString());
         command->clear();
         click(fieldPosition);
+        if (!leaveAndReturn()) return 11;
         type(Qt::Key_1, "1");
         if (field->property("text").toString() != "1" || !command->toPlainText().isEmpty()) {
             qWarning() << "Connection field input failed:" << field->objectName()
@@ -669,6 +685,7 @@ int TerminalPage::focusSmokeTest()
             return 4;
         }
         click(command->viewport()->mapTo(shell, QPoint(15, command->viewport()->height() / 2)));
+        if (!leaveAndReturn()) return 12;
         type(Qt::Key_X, "x");
         command->hideCompletion();
         if (command->toPlainText() != "x" || field->property("text").toString() != "1") return 5;
@@ -695,6 +712,6 @@ int TerminalPage::focusSmokeTest()
         type(Qt::Key_2, "2");
         if (field->property("text").toString() != "12" || command->toPlainText() != "x") return 10;
     }
-    qInfo() << "Focus routing: 15 cycles across username/password/IP, terminal and Watch editor passed";
+    qInfo() << "Focus routing: 15 cycles across username/password/IP, terminal and Watch editor; window reactivation passed";
     return 0;
 }

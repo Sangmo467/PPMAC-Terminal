@@ -1,7 +1,7 @@
 # PmacTerminal
 
 从 SetupTool 中独立提取的 PMAC 终端程序：顶部连接栏 + 多标签终端 + 左侧 Watch 面板。
-界面使用 Qt 6 / QML 外壳，终端为原生 QWidget；macOS 通过 QQuickWidget 将连接栏、终端和 Watch
+界面使用 Qt 6 / QML 外壳，终端为原生 QWidget；Windows/macOS 通过 QQuickWidget 将连接栏、终端和 Watch
 纳入同一个 QWidget 窗口的焦点链。命令补全由 Rust 编写的 `pmac-terminal-rs` 提供，
 PMAC 通信使用 `pmac.dll`（PMAC 2.0.7 MSVC x64 SDK）。
 
@@ -83,8 +83,8 @@ cmake --build build --parallel
 1. 下载 PMAC 2.0.7 对应平台 SDK Release；
 2. 编译 `third_party/pmac-terminal-rs` 终端核心；
 3. 构建并部署应用，上传产物：
-   - `PmacTerminal-windows-x64`（`PmacTerminal-1.0.2-windows-x64.zip`）
-   - `PmacTerminal-macos-arm64`（`PmacTerminal-1.0.2-macos-arm64.zip`，内含 `.app`）
+   - `PmacTerminal-windows-x64`（`PmacTerminal-1.0.3-windows-x64.zip`）
+   - `PmacTerminal-macos-arm64`（`PmacTerminal-1.0.3-macos-arm64.zip`，内含 `.app`）
 
 macOS 产物未使用开发者证书签名（仅 ad-hoc）。首次运行若被 Gatekeeper 拦截，
 可右键“打开”，或执行 `xattr -dr com.apple.quarantine <app 路径>`。
@@ -121,7 +121,7 @@ macOS 可执行 `dist/PmacTerminalApp.app/Contents/MacOS/PmacTerminalApp --termi
 CI 在 offscreen/software 后端运行该自检；真实输入法候选仍需在 macOS 桌面验证。
 macOS 焦点路由检查：`dist/PmacTerminalApp.app/Contents/MacOS/PmacTerminalApp --terminal-focus-smoke`。
 该检查通过顶层窗口派发鼠标/按键，循环验证用户名、密码、IP 与终端、Watch 单元格之间的输入切换。
-Windows 可用 `dist\PmacTerminalApp.exe --widget-shell --terminal-focus-smoke` 检查相同宿主路径；
+Windows 可用 `dist\PmacTerminalApp.exe --terminal-focus-smoke` 检查正式启动路径及窗口切回后的输入；
 macOS CI 还会使用 Cocoa 后端执行此项检查。
 
 退出取消自检：`dist\PmacTerminalApp.exe --backend-shutdown-smoke`（macOS 使用上述 `.app` 内的可执行文件）。

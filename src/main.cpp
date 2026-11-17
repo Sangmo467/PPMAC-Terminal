@@ -5,7 +5,8 @@
 #include <QTimer>
 #include "backend/TerminalPage.h"
 #include "backend/Backend.h"
-#include <QQmlApplicationEngine>
+#include <QQmlEngine>
+#include <QQmlError>
 #include <QQuickWindow>
 #include <QQuickWidget>
 #include <QScreen>
@@ -40,6 +41,7 @@ static int runWidgetShell(QApplication &app)
     shell.setObjectName("widgetShell");
     shell.setWindowTitle(QStringLiteral("PMAC Terminal"));
     shell.winId();
+    applyDarkTitleBar(shell.windowHandle());
     auto *layout = new QVBoxLayout(&shell);
     layout->setContentsMargins(0, 0, 0, 0);
     auto *view = new QQuickWidget(&shell);
@@ -91,43 +93,5 @@ int main(int argc, char *argv[])
         return result;
     }
 
-#ifdef Q_OS_MACOS
     return runWidgetShell(app);
-#else
-    // 其他平台可显式运行相同宿主进行离线回归；Windows 正常界面沿用原路径。
-    if (app.arguments().contains("--widget-shell")) return runWidgetShell(app);
-#endif
-
-    QQmlApplicationEngine engine;
-    const QUrl url(u"qrc:Main/main.qml"_qs);
-    QObject::connect(
-                &engine, &QQmlApplicationEngine::objectCreated, &app,
-                [url](QObject *obj, const QUrl &objUrl) {
-        if (!obj && url == objUrl)
-            QCoreApplication::exit(-1);
-    },
-    Qt::QueuedConnection);
-
-    engine.addImportPath(QCoreApplication::applicationDirPath() + "/qml");
-    engine.addImportPath(":/");
-
-    engine.load(url);
-
-    if (engine.rootObjects().isEmpty()) {
-        return -1;
-    }
-
-    applyDarkTitleBar(qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst()));
-
-    if (app.arguments().contains("--terminal-smoke")) {
-        QTimer::singleShot(800, &app, [&] {
-            auto root = engine.rootObjects().constFirst();
-            auto terminal = root->findChild<TerminalPage *>("terminalPage");
-            if (!terminal) { app.exit(20); return; }
-            const int result = terminal->smokeTest();
-            qInfo() << "Terminal integration smoke:" << result;
-            app.exit(result);
-        });
-    }
-    return app.exec();
 }
