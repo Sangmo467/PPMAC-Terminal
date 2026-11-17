@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  APP_VERSION: "1.0.0"
+  APP_VERSION: "1.0.1"
   QT_VERSION: "6.8.3"
   QT_VERSION_MACOS: "6.9.2"
   PMAC_VERSION: "2.0.7"
@@ -139,6 +139,8 @@ jobs:
           app="dist/PmacTerminalApp.app"
           test -f "$app/Contents/Frameworks/libpmac.dylib"
           test -f "$app/Contents/Frameworks/libpmac_terminal_core.dylib"
+          test -f "$app/Contents/Frameworks/QtCore.framework/Versions/A/QtCore"
+          test -f "$app/Contents/Frameworks/QtQuick.framework/Versions/A/QtQuick"
           codesign --force --deep --sign - "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
           otool -L "$app/Contents/MacOS/PmacTerminalApp"

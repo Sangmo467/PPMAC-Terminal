@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21.1)
 
-project(PmacTerminalApp VERSION 1.0.0 LANGUAGES CXX)
+project(PmacTerminalApp VERSION 1.0.1 LANGUAGES CXX)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
@@ -345,8 +345,16 @@ endif()
 
 # macOS：libpmac.dylib / Rust 核心位于 Contents/Frameworks。
 if (APPLE)
-    get_target_property(_qt_core_location Qt6::Core IMPORTED_LOCATION_RELEASE)
-    get_filename_component(_qt_lib_dir "${_qt_core_location}" DIRECTORY)
+    execute_process(
+        COMMAND "${_qt_qmake}" -query QT_INSTALL_LIBS
+        RESULT_VARIABLE _qt_libs_result
+        OUTPUT_VARIABLE _qt_lib_dir
+        ERROR_VARIABLE _qt_libs_error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if (NOT _qt_libs_result STREQUAL "0" OR NOT IS_DIRECTORY "${_qt_lib_dir}")
+        message(FATAL_ERROR "Unable to locate Qt libraries: ${_qt_libs_error}")
+    endif ()
     set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
         BUILD_RPATH "@executable_path/../Frameworks;${_qt_lib_dir}"
         INSTALL_RPATH "@executable_path/../Frameworks")
