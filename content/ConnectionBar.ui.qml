@@ -6,6 +6,7 @@ import PmacTerminal
 
 Rectangle {
     id: bar
+    objectName: "connectionBar"
 
     property alias username: userField.text
     property alias password: passField.text
@@ -38,32 +39,57 @@ Rectangle {
             font.pixelSize: Constants.fontTitle
             font.bold: true
             Layout.rightMargin: 10
+            Layout.minimumWidth: implicitWidth
         }
 
-        Text { text: LanguageManager.username; color: "#9aa3b2"; font.pixelSize: Constants.fontBody }
+        Text {
+            text: LanguageManager.username
+            color: "#9aa3b2"
+            font.pixelSize: Constants.fontBody
+            Layout.minimumWidth: implicitWidth
+        }
         AppTextField {
             id: userField
             objectName: "connectionUsername"
+            Layout.fillWidth: true
+            Layout.minimumWidth: Math.round(90 * Constants.uiScale)
             Layout.preferredWidth: Math.round(140 * Constants.uiScale)
+            Layout.maximumWidth: Math.round(140 * Constants.uiScale)
             text: "root"
             placeholderText: LanguageManager.phUsername
         }
 
-        Text { text: LanguageManager.password; color: "#9aa3b2"; font.pixelSize: Constants.fontBody }
+        Text {
+            text: LanguageManager.password
+            color: "#9aa3b2"
+            font.pixelSize: Constants.fontBody
+            Layout.minimumWidth: implicitWidth
+        }
         AppTextField {
             id: passField
             objectName: "connectionPassword"
+            Layout.fillWidth: true
+            Layout.minimumWidth: Math.round(90 * Constants.uiScale)
             Layout.preferredWidth: Math.round(140 * Constants.uiScale)
+            Layout.maximumWidth: Math.round(140 * Constants.uiScale)
             text: "deltatau"
             placeholderText: LanguageManager.phPassword
             echoMode: TextInput.Password
         }
 
-        Text { text: LanguageManager.ipAddress; color: "#9aa3b2"; font.pixelSize: Constants.fontBody }
+        Text {
+            text: LanguageManager.ipAddress
+            color: "#9aa3b2"
+            font.pixelSize: Constants.fontBody
+            Layout.minimumWidth: implicitWidth
+        }
         AppTextField {
             id: ipField
             objectName: "connectionIpAddress"
+            Layout.fillWidth: true
+            Layout.minimumWidth: Math.round(120 * Constants.uiScale)
             Layout.preferredWidth: Math.round(200 * Constants.uiScale)
+            Layout.maximumWidth: Math.round(200 * Constants.uiScale)
             text: Qt.platform.os === "osx" ? "192.168.250.200" : "192.168.0.200"
             placeholderText: "192.168.0.200"
             inputMethodHints: Qt.ImhFormattedNumbersOnly
@@ -76,6 +102,7 @@ Rectangle {
                 : LanguageManager.connect
             enabled: bar.connectionState !== "connecting"
             accent: bar.connectionState === "connected" ? "#d64545" : "#3fa7f5"
+            Layout.minimumWidth: implicitWidth
         }
 
         // 状态圆点 + 文字
@@ -84,6 +111,8 @@ Rectangle {
             height: 14
             radius: 6
             Layout.leftMargin: 8
+            Layout.minimumWidth: width
+            Layout.maximumWidth: width
             color: bar.connectionState === "connected" ? "#2ea44f"
                  : bar.connectionState === "connecting" ? "#d9a13b"
                  : bar.connectionState === "failed" ? "#d64545" : "#5a616d"
@@ -97,6 +126,7 @@ Rectangle {
                  : bar.connectionState === "connecting" ? "#d9a13b"
                  : bar.connectionState === "failed" ? "#d64545" : "#8a93a3"
             font.pixelSize: Constants.fontBody
+            Layout.minimumWidth: implicitWidth
         }
 
         // 固件版本（连接成功后由后台通过 gpascii "vers" 查询）
@@ -105,12 +135,20 @@ Rectangle {
             text: LanguageManager.firmwareLabel + ": " + bar.firmwareVersion
             color: "#8a93a3"
             font.pixelSize: Constants.fontBody
+            elide: Text.ElideRight
+            Layout.fillWidth: true
             Layout.leftMargin: 16
+            Layout.maximumWidth: Math.round(320 * Constants.uiScale)
         }
 
         Item { Layout.fillWidth: true }
 
-        Text { text: LanguageManager.languageLabel; color: "#9aa3b2"; font.pixelSize: Constants.fontBody }
+        Text {
+            text: LanguageManager.languageLabel
+            color: "#9aa3b2"
+            font.pixelSize: Constants.fontBody
+            Layout.minimumWidth: implicitWidth
+        }
         Rectangle {
             id: languageSelector
             objectName: "languageSelector"
@@ -121,6 +159,9 @@ Rectangle {
             }
             implicitWidth: Math.round(160 * Constants.uiScale)
             implicitHeight: Math.round(42 * Constants.uiScale)
+            Layout.minimumWidth: implicitWidth
+            Layout.preferredWidth: implicitWidth
+            Layout.maximumWidth: implicitWidth
             radius: 4
             color: "#16181d"
             border.color: languageMouse.containsMouse ? "#3fa7f5" : "#3a4150"

@@ -613,9 +613,12 @@ int TerminalPage::focusSmokeTest()
     auto *username = sceneRoot->findChild<QQuickItem *>("connectionUsername");
     auto *ip = sceneRoot->findChild<QQuickItem *>("connectionIpAddress");
     auto *password = sceneRoot->findChild<QQuickItem *>("connectionPassword");
+    auto *connectionBar = sceneRoot->findChild<QQuickItem *>("connectionBar");
+    auto *languageSelector = sceneRoot->findChild<QQuickItem *>("languageSelector");
     auto *command = d->tabs->currentWidget()->findChild<CommandEdit *>("commandInput");
     auto *table = d->watch->findChild<QTableWidget *>("watchTable");
-    if (!nativeWindow || !username || !password || !ip || !command || !table) return 2;
+    if (!nativeWindow || !username || !password || !ip || !connectionBar || !languageSelector
+        || !command || !table) return 2;
 #ifdef Q_OS_MACOS
     if (ip->property("text").toString() != "192.168.250.200") return 3;
 #else
@@ -628,6 +631,27 @@ int TerminalPage::focusSmokeTest()
         for (int i = 0; i < fields.size(); ++i) fields[i]->setProperty("text", savedText[i]);
         command->clear();
     });
+    const QSize savedSize = shell->size();
+    shell->resize(1440, 900);
+    connectionBar->setProperty("connectionState", QStringLiteral("connected"));
+    connectionBar->setProperty("firmwareVersion", QStringLiteral("2.6.0.0"));
+    QApplication::processEvents();
+    const qreal languageRight = languageSelector->mapToItem(
+        connectionBar, QPointF(languageSelector->width(), 0)).x();
+    const qreal barWidth = connectionBar->width();
+    const bool languageVisible = languageSelector->width() >= 159
+        && languageRight <= barWidth - 19;
+    if (!languageVisible) {
+        qWarning() << "Connection layout overflow:" << languageRight
+                   << "bar width" << barWidth << "shell width" << shell->width()
+                   << "selector width" << languageSelector->width()
+                   << "fields" << username->width() << password->width() << ip->width();
+    }
+    connectionBar->setProperty("connectionState", QStringLiteral("disconnected"));
+    connectionBar->setProperty("firmwareVersion", QString());
+    shell->resize(savedSize);
+    QApplication::processEvents();
+    if (!languageVisible) return 13;
     // 路由测试不依赖 CI 桌面的前台窗口权限或显示器分辨率。
     shell->setMinimumSize(1920, 1080);
     shell->resize(1920, 1080);

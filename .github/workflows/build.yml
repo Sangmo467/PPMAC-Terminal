@@ -13,7 +13,7 @@ env:
   APP_VERSION: "1.0.3"
   QT_VERSION: "6.8.3"
   QT_VERSION_MACOS: "6.9.2"
-  PMAC_VERSION: "2.0.7"
+  PMAC_VERSION: "2.0.8"
   PMAC_REPO: "Sangmo467/communication-library-for-ppmac-rust"
   PMACT_ROOT: "${{ github.workspace }}/third_party/pmac-terminal-rs"
 
