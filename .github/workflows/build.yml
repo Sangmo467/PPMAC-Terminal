@@ -164,6 +164,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - name: Verify release version
         run: test "$GITHUB_REF_NAME" = "v$APP_VERSION"
 
