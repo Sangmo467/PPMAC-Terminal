@@ -64,6 +64,15 @@ bool parseResponseValue(const QString &line, double *number, quint64 *bits, bool
     return true;
 }
 
+// 查询错误只停止对应行；普通 stderr 警告不影响有效响应。
+QString queryErrorText(const QString &text, const QString &stderrText, const QString &error)
+{
+    if (!error.isEmpty()) return error;
+    if (stderrText.contains(QStringLiteral("error #"), Qt::CaseInsensitive)) return stderrText;
+    if (text.contains(QStringLiteral("error #"), Qt::CaseInsensitive)) return text;
+    return {};
+}
+
 // 支持鼠标拖动调整行序，Delete 删除选中行。
 class WatchTable : public QTableWidget {
 public:
@@ -195,13 +204,13 @@ struct WatchPanel::Impl {
     QTimer pollTimer, watchdog;
     QList<QMetaObject::Connection> connections;
     QHash<QString, int> inflight;   // request id -> row
+    QSet<QString> pollIds;
     QVector<RowKind> kinds;
     QVector<Format> formats;
     QVector<quint64> masks;
     QVector<QString> raw;
+    QVector<bool> pollingDisabled;
     HardwareConfig hardware;
-    QString pollId;
-    int nextQueryRow = 0;
     int periodMs = 100;
     bool updating = false;
 };
@@ -227,10 +236,10 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
     d->periodLabel = new QLabel;
     d->periodCombo = new QComboBox;
     d->periodCombo->setObjectName("watchPeriod");
-    for (const auto &period : {100, 500, 1000, 2000, 5000}) {
+    for (const auto &period : {50, 100, 500, 1000, 2000, 5000}) {
         d->periodCombo->addItem(QStringLiteral("%1 s").arg(period / 1000.0), period);
     }
-    d->periodCombo->setCurrentIndex(0);
+    d->periodCombo->setCurrentIndex(1);
     d->pauseBox = new QCheckBox;
     d->pauseBox->setObjectName("watchPause");
     d->addAsButton = new QCheckBox;
@@ -294,6 +303,7 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
         if (d->updating || !item || item->column() != 0) return;
         const int row = item->row();
         if (d->kinds.value(row) != RowKind::Query) return;
+        d->pollingDisabled[row] = false;
         const auto text = item->text().trimmed();
         if (text.isEmpty()) {
             setResponse(row, QString(), false);
@@ -367,17 +377,21 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
         menu.addAction(t("watch.removeRow"), this, [this, row] { removeRow(row); });
         menu.exec(d->table->viewport()->mapToGlobal(position));
     });
+    d->pollTimer.setTimerType(Qt::PreciseTimer);
     connect(&d->pollTimer, &QTimer::timeout, this, [this] { pollTick(); });
     d->watchdog.setSingleShot(true);
     connect(&d->watchdog, &QTimer::timeout, this, [this] {
-        if (d->pollId.isEmpty()) return;
-        auto it = d->inflight.find(d->pollId);
-        if (it != d->inflight.end()) {
+        if (d->pollIds.isEmpty()) return;
+        const auto expired = d->pollIds;
+        d->pollIds.clear();
+        for (const auto &id : expired) {
+            auto it = d->inflight.find(id);
+            if (it == d->inflight.end()) continue;
             const int row = it.value();
             d->inflight.erase(it);
+            d->pollingDisabled[row] = true;
             setResponse(row, t("watch.timeout"), true);
         }
-        d->pollId.clear();
         schedulePolling();
     });
 
@@ -403,18 +417,24 @@ void WatchPanel::setBackend(Backend *backend)
     d->connections.clear();
     d->backend = backend;
     d->inflight.clear();
-    d->pollId.clear();
+    d->pollIds.clear();
     d->watchdog.stop();
     d->pollTimer.stop();
     if (backend) {
         d->connections << connect(backend, &Backend::terminalResponse, this,
-            [this](const QString &id, const QString &text, const QString &, double, const QString &error) {
+            [this](const QString &id, const QString &text, const QString &stderrText,
+                   double, const QString &error) {
                 auto it = d->inflight.find(id);
                 if (it == d->inflight.end()) return;
                 const int row = it.value();
                 d->inflight.erase(it);
-                if (id == d->pollId) { d->pollId.clear(); d->watchdog.stop(); }
-                setResponse(row, error.isEmpty() ? text : error, !error.isEmpty());
+                d->pollIds.remove(id);
+                if (d->pollIds.isEmpty()) d->watchdog.stop();
+                else d->watchdog.start(kPollWatchdogMs);
+                const auto failure = queryErrorText(text, stderrText, error);
+                if (!failure.isEmpty() && d->kinds.value(row) == RowKind::Query)
+                    d->pollingDisabled[row] = true;
+                setResponse(row, failure.isEmpty() ? text : failure, !failure.isEmpty());
                 schedulePolling();
             });
         d->connections << connect(backend, &Backend::connectionStateChanged, this, [this] {
@@ -422,7 +442,7 @@ void WatchPanel::setBackend(Backend *backend)
                 for (auto it = d->inflight.begin(); it != d->inflight.end(); ++it)
                     setResponse(it.value(), t("watch.notConnected"), true);
                 d->inflight.clear();
-                d->pollId.clear();
+                d->pollIds.clear();
                 d->watchdog.stop();
             }
             schedulePolling();
@@ -433,7 +453,7 @@ void WatchPanel::setBackend(Backend *backend)
         d->connections << connect(backend, &QObject::destroyed, this, [this] {
             d->backend = nullptr;
             d->inflight.clear();
-            d->pollId.clear();
+            d->pollIds.clear();
             d->watchdog.stop();
             d->pollTimer.stop();
             retranslate();
@@ -551,6 +571,7 @@ void WatchPanel::addRow(const QString &request, bool asButton)
         d->formats.append(Impl::Format::Auto);
         d->masks.append(~quint64(0));
         d->raw.append(QString());
+        d->pollingDisabled.append(false);
     } else {
         d->table->item(row, 0)->setText(text);
         if (auto *response = d->table->item(row, 1)) response->setText(QString());
@@ -558,6 +579,7 @@ void WatchPanel::addRow(const QString &request, bool asButton)
         d->formats[row] = Impl::Format::Auto;
         d->masks[row] = ~quint64(0);
         d->raw[row].clear();
+        d->pollingDisabled[row] = false;
     }
     d->updating = false;
     // 显式勾选“添加为按钮”即视为已确认，直接按按钮行创建。
@@ -617,6 +639,7 @@ void WatchPanel::ensurePlaceholder()
     d->formats.append(Impl::Format::Auto);
     d->masks.append(~quint64(0));
     d->raw.append(QString());
+    d->pollingDisabled.append(false);
     d->updating = false;
     d->placeholderIndex = row;
 }
@@ -671,8 +694,10 @@ void WatchPanel::removeRow(int row)
         widget->deleteLater();
     }
     for (auto it = d->inflight.begin(); it != d->inflight.end();) {
-        if (it.value() == row) it = d->inflight.erase(it);
-        else { if (it.value() > row) --it.value(); ++it; }
+        if (it.value() == row) {
+            d->pollIds.remove(it.key());
+            it = d->inflight.erase(it);
+        } else { if (it.value() > row) --it.value(); ++it; }
     }
     d->updating = true;
     d->table->removeRow(row);
@@ -680,9 +705,9 @@ void WatchPanel::removeRow(int row)
     d->formats.removeAt(row);
     d->masks.removeAt(row);
     d->raw.removeAt(row);
+    d->pollingDisabled.removeAt(row);
     d->updating = false;
-    if (d->nextQueryRow > row) --d->nextQueryRow;
-    if (d->nextQueryRow >= d->table->rowCount()) d->nextQueryRow = 0;
+    if (d->pollIds.isEmpty()) d->watchdog.stop();
     ensurePlaceholder();
     schedulePolling();
 }
@@ -706,6 +731,7 @@ void WatchPanel::moveRow(int from, int to)
     const auto kind = d->kinds.value(from);
     const auto format = d->formats.value(from);
     const auto mask = d->masks.value(from);
+    const auto pollingDisabled = d->pollingDisabled.value(from);
     for (auto it = d->inflight.begin(); it != d->inflight.end(); ++it) {
         int &value = it.value();
         if (value == from) value = to;
@@ -733,11 +759,11 @@ void WatchPanel::moveRow(int from, int to)
     d->formats.removeAt(from); d->formats.insert(to, format);
     d->masks.removeAt(from); d->masks.insert(to, mask);
     d->raw.removeAt(from); d->raw.insert(to, raw);
+    d->pollingDisabled.removeAt(from); d->pollingDisabled.insert(to, pollingDisabled);
     d->updating = false;
     if (kind == RowKind::Button) attachButton(to, request);
     applyFormat(to);
     d->table->selectRow(to);
-    d->nextQueryRow = 0;
     ensurePlaceholder();
     schedulePolling();
 }
@@ -771,7 +797,7 @@ void WatchPanel::applyFormat(int row)
     QString first = d->raw.value(row);
     const int newline = first.indexOf(QLatin1Char('\n'));
     if (newline >= 0) first = first.left(newline);
-    QString display = first.trimmed();
+    QString display = extractValueText(first);
     double number = 0;
     quint64 bits = 0;
     bool validBits = false;
@@ -863,6 +889,7 @@ void WatchPanel::sendRow(int row)
 void WatchPanel::refreshRow(int row)
 {
     if (row < 0 || row >= d->table->rowCount() || d->kinds.value(row) != RowKind::Query) return;
+    d->pollingDisabled[row] = false;
     if (!d->backend || d->backend->connectionState() != QLatin1String("connected")) {
         setResponse(row, t("watch.notConnected"), true);
         return;
@@ -883,7 +910,6 @@ void WatchPanel::schedulePolling()
         d->pollTimer.stop();
         return;
     }
-    // 周期是相邻查询的间隔；N 行时每行约每 N × 周期刷新一次。
     const int interval = qMax(kPollFloorMs, d->periodMs);
     if (!d->pollTimer.isActive() || d->pollTimer.interval() != interval)
         d->pollTimer.start(interval);
@@ -895,21 +921,17 @@ void WatchPanel::pollTick()
         || d->backend->busy() || d->pauseBox->isChecked()
         || (d->terminalBusy && d->terminalBusy()) || !d->inflight.isEmpty())
         return;
-    const int rows = d->table->rowCount();
-    if (rows == 0) return;
-    for (int offset = 0; offset < rows; ++offset) {
-        const int row = (d->nextQueryRow + offset) % rows;
-        if (d->kinds.value(row) != RowKind::Query) continue;
+    // 同一轮连续提交所有有效行；每条仍是独立 GPASCII 帧，不在行之间等待一个周期。
+    for (int row = 0; row < d->table->rowCount(); ++row) {
+        if (d->kinds.value(row) != RowKind::Query || d->pollingDisabled.value(row)) continue;
         const auto request = rowRequest(row).trimmed();
         if (request.isEmpty()) continue;
-        d->nextQueryRow = (row + 1) % rows;
         const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         d->inflight.insert(id, row);
-        d->pollId = id;
-        d->watchdog.start(kPollWatchdogMs);
+        d->pollIds.insert(id);
         d->backend->sendTerminalCommand(id, request);
-        return;
     }
+    if (!d->pollIds.isEmpty()) d->watchdog.start(kPollWatchdogMs);
 }
 
 int WatchPanel::queryRowCount() const
@@ -917,7 +939,8 @@ int WatchPanel::queryRowCount() const
     int count = 0;
     for (int row = 0; row < d->table->rowCount(); ++row) {
         const auto *item = d->table->item(row, 0);
-        if (d->kinds.value(row) == RowKind::Query && item && !item->text().trimmed().isEmpty())
+        if (d->kinds.value(row) == RowKind::Query && !d->pollingDisabled.value(row)
+            && item && !item->text().trimmed().isEmpty())
             ++count;
     }
     return count;
@@ -949,6 +972,31 @@ QString WatchPanel::rowResponseForTest(int row) const
 
 int WatchPanel::smokeTest()
 {
+    const int savedPeriodIndex = d->periodCombo->currentIndex();
+    d->periodCombo->setCurrentIndex(0);
+    if (d->periodMs != 50 || d->periodCombo->currentData().toInt() != 50) return 3;
+    d->periodCombo->setCurrentIndex(savedPeriodIndex);
+
+    addRowForTest(QStringLiteral("PollingErrorTest"));
+    const int queryRow = placeholderRow() - 1;
+    if (queryRow < 0 || !d->backend) return 4;
+    const int activeBefore = queryRowCount();
+    auto respond = [&](const QString &text, const QString &stderrText, const QString &error) {
+        const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        d->inflight.insert(id, queryRow);
+        d->pollIds.insert(id);
+        emit d->backend->terminalResponse(id, text, stderrText, 0.0, error);
+    };
+    respond({}, {}, QStringLiteral("controller rejected command"));
+    if (!d->pollingDisabled.value(queryRow) || queryRowCount() != activeBefore - 1) return 5;
+    d->table->item(queryRow, 0)->setText(QStringLiteral("PollingErrorRetry"));
+    if (d->pollingDisabled.value(queryRow)) return 6;
+    respond(QStringLiteral("P=1"),
+            QStringLiteral("stdin:5:2: error #20: ILLEGAL CMD: PollingErrorRetry"), {});
+    if (!d->pollingDisabled.value(queryRow) || queryRowCount() != activeBefore - 1) return 7;
+    removeRow(queryRow);
+    qInfo() << "Watch polling: 50 ms option, per-row error stop and edit retry passed";
+
     // Exercise actual display formatting, including integers beyond double's
     // exact range and values that cannot safely be converted to 64-bit bits.
     const int row = placeholderRow();
@@ -980,6 +1028,11 @@ int WatchPanel::smokeTest()
             return 2;
         }
     }
-    qInfo() << "Watch formatting: exact integers, negative values and invalid bit conversions passed";
+    d->formats[row] = Impl::Format::Auto;
+    setResponse(row, QStringLiteral("Message=hello world"), false);
+    if (rowResponseForTest(row) != QStringLiteral("hello world")) return 8;
+    setResponse(row, QStringLiteral("Message=left=right"), false);
+    if (rowResponseForTest(row) != QStringLiteral("left=right")) return 9;
+    qInfo() << "Watch formatting: numbers, invalid bit conversions and string values passed";
     return 0;
 }
