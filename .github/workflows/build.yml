@@ -3,6 +3,7 @@ name: build
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -155,3 +156,28 @@ jobs:
           name: PmacTerminal-macos-arm64
           path: PmacTerminal-${{ env.APP_VERSION }}-macos-arm64.zip
           if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [windows-x64, macos-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Verify release version
+        run: test "$GITHUB_REF_NAME" = "v$APP_VERSION"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            release/PmacTerminal-windows-x64/*.zip \
+            release/PmacTerminal-macos-arm64/*.zip \
+            --title "PmacTerminal $APP_VERSION" \
+            --generate-notes \
+            --verify-tag
