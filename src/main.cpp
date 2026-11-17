@@ -14,6 +14,11 @@
 
 #include "app_environment.h"
 #include "import_qml_plugins.h"
+#include "backend/Backend.h"
+
+#include <QKeyEvent>
+#include <QPlainTextEdit>
+#include <QTimer>
 
 #ifdef Q_OS_WIN
 #include <dwmapi.h>
@@ -64,7 +69,45 @@ static int runWidgetShell(QApplication &app)
                  qMin(preferred.height(), available.height() - 120));
     shell.show();
     const bool focusSmoke = app.arguments().contains("--terminal-focus-smoke");
-    if (focusSmoke || app.arguments().contains("--terminal-smoke")) {
+    if (app.arguments().contains("--terminal-device-smoke")) {
+        QTimer::singleShot(800, &app, [&] {
+            auto *terminal = view->rootObject()->findChild<TerminalPage *>("terminalPage");
+            if (!terminal || !terminal->backend()) { qInfo() << "no backend"; app.exit(20); return; }
+            auto *backend = terminal->backend();
+            backend->connectTo(qEnvironmentVariable("PMAC_USER", "root"),
+                               qEnvironmentVariable("PMAC_PASSWORD"),
+                               qEnvironmentVariable("PMAC_HOST", "192.168.0.200"));
+            auto *poll = new QTimer(&app);
+            poll->setInterval(200);
+            QObject::connect(poll, &QTimer::timeout, &app, [&, backend, terminal, poll] {
+                if (backend->connectionState() != QLatin1String("connected") || backend->busy()) return;
+                poll->stop();
+                QPlainTextEdit *input = nullptr, *output = nullptr;
+                for (auto *widget : QApplication::allWidgets()) {
+                    if (widget->objectName() == QLatin1String("commandInput"))
+                        input = qobject_cast<QPlainTextEdit *>(widget);
+                    else if (widget->objectName() == QLatin1String("terminalOutput"))
+                        output = qobject_cast<QPlainTextEdit *>(widget);
+                }
+                if (!input) { qInfo() << "no input"; app.exit(21); return; }
+                QObject::connect(backend, &Backend::terminalResponse, &app,
+                    [](const QString &id, const QString &text, const QString &stderrText,
+                       double, const QString &error) {
+                        qInfo().noquote() << "SIGNAL id=" << id << "stdout=" << text
+                                          << "stderr=" << stderrText << "error=" << error;
+                    });
+                input->setPlainText(QStringLiteral("sefsoefunha"));
+                QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier, "\r");
+                QApplication::sendEvent(input, &enter);
+                QTimer::singleShot(3000, &app, [&, output] {
+                    qInfo().noquote() << "OUTPUT>>";
+                    if (output) qInfo().noquote() << output->toPlainText();
+                    app.exit(0);
+                });
+            });
+            poll->start();
+        });
+    } else if (focusSmoke || app.arguments().contains("--terminal-smoke")) {
         QTimer::singleShot(800, &app, [&] {
             auto *terminal = view->rootObject()->findChild<TerminalPage *>("terminalPage");
             if (!terminal) { app.exit(20); return; }

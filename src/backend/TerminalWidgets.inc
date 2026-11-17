@@ -277,6 +277,11 @@ public:
     int loadTestSymbols(const QByteArray &json) {
         return api.setSymbols(handle, reinterpret_cast<const uint8_t *>(json.constData()), size_t(json.size()));
     }
+    void displayResponseForTest(const QString &text, const QString &stderrText, const QString &error) {
+        pending = true;
+        pendingId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        emit backend->terminalResponse(pendingId, text, stderrText, 0.0, error);
+    }
     ~Terminal() override {
         // 子控件销毁会改变焦点；此时状态标签和 Terminal 成员可能已经释放。
         if (input) input->stateChanged = {};

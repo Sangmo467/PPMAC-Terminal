@@ -3,7 +3,7 @@
 从 SetupTool 中独立提取的 PMAC 终端程序：顶部连接栏 + 多标签终端 + 左侧 Watch 面板。
 界面使用 Qt 6 / QML 外壳，终端为原生 QWidget；Windows/macOS 通过 QQuickWidget 将连接栏、终端和 Watch
 纳入同一个 QWidget 窗口的焦点链。命令补全由 Rust 编写的 `pmac-terminal-rs` 提供，
-PMAC 通信使用 `pmac.dll`（PMAC 2.0.9 MSVC x64 SDK）。
+PMAC 通信使用 `pmac.dll`（PMAC 2.0.10 MSVC x64 SDK）。
 
 ## 功能
 
@@ -31,7 +31,7 @@ PMAC 通信使用 `pmac.dll`（PMAC 2.0.9 MSVC x64 SDK）。
 - Windows 10/11 x64：Visual Studio 2022（MSVC）+ Qt 6.8.x MSVC 2022 64-bit
 - macOS 12+（Apple Silicon）：Xcode Command Line Tools + Qt 6.9.2+ macOS（universal，arm64 原生运行；兼容已移除 AGL 的 Xcode 26 SDK）
 - CMake ≥ 3.21、Rust stable（编译 `third_party/pmac-terminal-rs`）
-- PMAC 2.0.9 SDK（按平台选择）：`x86_64-pc-windows-msvc` 或 `aarch64-apple-darwin`，
+- PMAC 2.0.10 SDK（按平台选择）：`x86_64-pc-windows-msvc` 或 `aarch64-apple-darwin`，
   包含 `include/`、`native/pmac.dll|libpmac.dylib`、`cmake/PmacConfig.cmake`
 - Rust 终端核心：`cargo build --release --lib` 生成
   `pmac_terminal_core.dll`（Windows）/ `libpmac_terminal_core.dylib`（macOS）
@@ -50,7 +50,7 @@ Windows 本地构建：
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
   -DCMAKE_PREFIX_PATH="C:/Qt/6.8.3/msvc2022_64" `
-  -DPMAC_SDK_DIR="D:/sdk/pmac-2.0.9-x86_64-pc-windows-msvc-release"
+  -DPMAC_SDK_DIR="D:/sdk/pmac-2.0.10-x86_64-pc-windows-msvc-release"
 
 cmake --build build --config Release
 ```
@@ -62,11 +62,11 @@ cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
   -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" \
-  -DPMAC_SDK_DIR="$PWD/pmac-2.0.9-aarch64-apple-darwin-release"
+  -DPMAC_SDK_DIR="$PWD/pmac-2.0.10-aarch64-apple-darwin-release"
 cmake --build build --parallel
 ```
 
-- `PMAC_SDK_DIR`：PMAC 2.0.9 SDK 根目录（默认按平台查找源码同级同名目录）。
+- `PMAC_SDK_DIR`：PMAC 2.0.10 SDK 根目录（默认按平台查找源码同级同名目录）。
 - `PMACT_ROOT`：Rust 终端核心源码目录（默认 `third_party/pmac-terminal-rs`），
   也可用 `PMACT_CORE_LIB` 单独指定已编译的核心库。
 - macOS 构建自动运行 `macdeployqt`，产物为 `dist/PmacTerminalApp.app`。
@@ -80,7 +80,7 @@ cmake --build build --parallel
 
 推送 `main`/`master` 或手动触发 `.github/workflows/build.yml`，CI 会：
 
-1. 下载 PMAC 2.0.9 对应平台 SDK Release；
+1. 下载 PMAC 2.0.10 对应平台 SDK Release；
 2. 编译 `third_party/pmac-terminal-rs` 终端核心；
 3. 构建并部署应用，上传产物：
    - `PmacTerminal-windows-x64`（`PmacTerminal-1.0.5-windows-x64.zip`）

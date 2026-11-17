@@ -54,6 +54,8 @@ public:
             error = QString::fromUtf8(e.what());
         }
         if (PmacConnection::interrupted()) return;
+        qInfo().noquote() << "terminalCommand" << command << "stdout=" << text
+                          << "stderr=" << stderrText << "error=" << error;
         emit terminalCommandReady(generation, id, text, stderrText,
                                   elapsed.nsecsElapsed() / 1000000.0, error);
         if (!reset) {

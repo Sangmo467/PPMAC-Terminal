@@ -127,22 +127,22 @@ if (NOT APPLE)
     )
 endif ()
 
-# PMAC 2.0.9 SDK（Windows MSVC x64 / macOS ARM64 / Linux x64）。仓库不包含预编译 SDK，
+# PMAC 2.0.10 SDK（Windows MSVC x64 / macOS ARM64 / Linux x64）。仓库不包含预编译 SDK，
 # 需下载后放到源码同级目录，或通过 -DPMAC_SDK_DIR=<路径> 指定。
 if (WIN32)
-    set(_pmac_sdk_default "${CMAKE_CURRENT_SOURCE_DIR}/pmac-2.0.9-x86_64-pc-windows-msvc-release")
+    set(_pmac_sdk_default "${CMAKE_CURRENT_SOURCE_DIR}/pmac-2.0.10-x86_64-pc-windows-msvc-release")
     set(_pmac_native_lib "native/pmac.dll")
 elseif (APPLE)
-    set(_pmac_sdk_default "${CMAKE_CURRENT_SOURCE_DIR}/pmac-2.0.9-aarch64-apple-darwin-release")
+    set(_pmac_sdk_default "${CMAKE_CURRENT_SOURCE_DIR}/pmac-2.0.10-aarch64-apple-darwin-release")
     set(_pmac_native_lib "native/libpmac.dylib")
 else ()
-    set(_pmac_sdk_default "${CMAKE_CURRENT_SOURCE_DIR}/pmac-2.0.9-x86_64-unknown-linux-gnu-release")
+    set(_pmac_sdk_default "${CMAKE_CURRENT_SOURCE_DIR}/pmac-2.0.10-x86_64-unknown-linux-gnu-release")
     set(_pmac_native_lib "native/libpmac.so")
 endif ()
-set(PMAC_SDK_DIR "${_pmac_sdk_default}" CACHE PATH "PMAC 2.0.9 SDK directory")
+set(PMAC_SDK_DIR "${_pmac_sdk_default}" CACHE PATH "PMAC 2.0.10 SDK directory")
 if (NOT EXISTS "${PMAC_SDK_DIR}/cmake/PmacConfig.cmake" OR NOT EXISTS "${PMAC_SDK_DIR}/${_pmac_native_lib}")
     message(FATAL_ERROR
-        "PMAC SDK not found at ${PMAC_SDK_DIR}. Download the matching pmac-2.0.9-*-release "
+        "PMAC SDK not found at ${PMAC_SDK_DIR}. Download the matching pmac-2.0.10-*-release "
         "package and pass -DPMAC_SDK_DIR=<path>.")
 endif ()
 

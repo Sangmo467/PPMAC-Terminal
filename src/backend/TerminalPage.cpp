@@ -518,6 +518,16 @@ int TerminalPage::smokeTest()
     if (!copied) return 8;
     page->findChild<QPushButton *>("clearOutput")->click();
     if (!output->toPlainText().isEmpty()) return 9;
+    const QString diagnostic = QStringLiteral("stdin:5:2: error #20: ILLEGAL CMD: sefsoefunha");
+    static_cast<Terminal *>(page)->displayResponseForTest({}, diagnostic, {});
+    auto diagnosticCursor = output->document()->find(diagnostic);
+    if (!diagnosticCursor.hasSelection()
+        || diagnosticCursor.charFormat().foreground().color() != TerminalColors::error) return 120;
+    static_cast<Terminal *>(page)->displayResponseForTest({}, {}, diagnostic);
+    diagnosticCursor = output->document()->find(diagnostic, diagnosticCursor);
+    if (!diagnosticCursor.hasSelection()
+        || diagnosticCursor.charFormat().foreground().color() != TerminalColors::error) return 121;
+    qInfo() << "GPASCII stderr and command errors: red diagnostic lines passed";
     emit d->tabs->tabCloseRequested(1);
     if (d->tabs->count() != 1) return 10;
     // 最后一页不可关闭。
