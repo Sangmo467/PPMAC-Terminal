@@ -18,6 +18,7 @@ Rectangle {
 
     height: Math.round(88 * Constants.uiScale)
     color: "#1f232b"
+    clip: true
 
     Rectangle {
         anchors.left: parent.left
@@ -28,12 +29,16 @@ Rectangle {
     }
 
     RowLayout {
-        anchors.fill: parent
-        anchors.leftMargin: 20
-        anchors.rightMargin: 20
-        spacing: 10
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.right: languageRow.left
+        anchors.leftMargin: bar.width < 1200 ? 12 : 20
+        anchors.rightMargin: 10
+        spacing: bar.width < 1200 ? 6 : 10
 
         Text {
+            visible: bar.width >= 1250
             text: LanguageManager.pmacConnection
             color: "#e8ecf1"
             font.pixelSize: Constants.fontTitle
@@ -43,6 +48,7 @@ Rectangle {
         }
 
         Text {
+            visible: bar.width >= 1200
             text: LanguageManager.username
             color: "#9aa3b2"
             font.pixelSize: Constants.fontBody
@@ -60,6 +66,7 @@ Rectangle {
         }
 
         Text {
+            visible: bar.width >= 1200
             text: LanguageManager.password
             color: "#9aa3b2"
             font.pixelSize: Constants.fontBody
@@ -78,6 +85,7 @@ Rectangle {
         }
 
         Text {
+            visible: bar.width >= 1200
             text: LanguageManager.ipAddress
             color: "#9aa3b2"
             font.pixelSize: Constants.fontBody
@@ -123,25 +131,35 @@ Rectangle {
                 : bar.connectionState === "failed" ? LanguageManager.statusFailed
                 : LanguageManager.statusDisconnected
             color: bar.connectionState === "connected" ? "#2ea44f"
-                 : bar.connectionState === "connecting" ? "#d9a13b"
-                 : bar.connectionState === "failed" ? "#d64545" : "#8a93a3"
+                : bar.connectionState === "connecting" ? "#d9a13b"
+                : bar.connectionState === "failed" ? "#d64545" : "#8a93a3"
             font.pixelSize: Constants.fontBody
             Layout.minimumWidth: implicitWidth
         }
 
-        // 固件版本（连接成功后由后台通过 gpascii "vers" 查询）
+        // 宽屏保留固件版本；窄屏优先保留连接与语言控制。
         Text {
-            visible: bar.connectionState === "connected" && bar.firmwareVersion.length > 0
+            visible: bar.width >= 1700 && bar.connectionState === "connected"
+                && bar.firmwareVersion.length > 0
             text: LanguageManager.firmwareLabel + ": " + bar.firmwareVersion
             color: "#8a93a3"
             font.pixelSize: Constants.fontBody
             elide: Text.ElideRight
             Layout.fillWidth: true
+            Layout.minimumWidth: 0
             Layout.leftMargin: 16
             Layout.maximumWidth: Math.round(320 * Constants.uiScale)
         }
 
         Item { Layout.fillWidth: true }
+    }
+
+    RowLayout {
+        id: languageRow
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.right: parent.right
+        anchors.rightMargin: bar.width < 1200 ? 12 : 20
+        spacing: 10
 
         Text {
             text: LanguageManager.languageLabel
