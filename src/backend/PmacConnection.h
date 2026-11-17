@@ -34,14 +34,26 @@ public:
         wait(request);
     }
 
+    struct Response {
+        std::string output;
+        std::string stderrText;
+    };
+
     // 使用 SDK 默认执行超时（包括复位命令的加长预算），只缩短单次等待以响应退出。
-    std::string getResponse(const std::string &command, const std::string &pattern = "")
+    Response getResponseWithStderr(const std::string &command, const std::string &pattern = "")
     {
         checkInterrupted();
         auto request = m_client.getResponseAsync(command);
         wait(request);
         const auto bytes = pattern.empty() ? request.response() : request.match(pattern);
-        return std::string(bytes.begin(), bytes.end());
+        const auto diagnostics = request.stderrBytes();
+        return {std::string(bytes.begin(), bytes.end()),
+                std::string(diagnostics.begin(), diagnostics.end())};
+    }
+
+    std::string getResponse(const std::string &command, const std::string &pattern = "")
+    {
+        return getResponseWithStderr(command, pattern).output;
     }
 
     std::vector<uint8_t> shell(const std::string &command, bool persistent = false)

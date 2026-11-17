@@ -42,17 +42,20 @@ public:
         if (PmacConnection::interrupted()) return;
         QElapsedTimer elapsed;
         elapsed.start();
-        QString text, error;
+        QString text, stderrText, error;
         const bool reset = isResetCommand(command);
         try {
             if (!m_client || !m_client->isConnected())
                 throw std::runtime_error("主连接未连接");
-            text = QString::fromUtf8(m_client->getResponse(command.toUtf8().toStdString()));
+            const auto response = m_client->getResponseWithStderr(command.toUtf8().toStdString());
+            text = QString::fromUtf8(response.output);
+            stderrText = QString::fromUtf8(response.stderrText);
         } catch (const std::exception &e) {
             error = QString::fromUtf8(e.what());
         }
         if (PmacConnection::interrupted()) return;
-        emit terminalCommandReady(generation, id, text, elapsed.nsecsElapsed() / 1000000.0, error);
+        emit terminalCommandReady(generation, id, text, stderrText,
+                                  elapsed.nsecsElapsed() / 1000000.0, error);
         if (!reset) {
             if (m_client && !m_client->isConnected()) handleConnectionLost();
             return;
@@ -330,7 +333,7 @@ public:
 
 signals:
     void terminalCommandReady(quint64 generation, const QString &id, const QString &text,
-                              double elapsedMs, const QString &error);
+                              const QString &stderrText, double elapsedMs, const QString &error);
     void terminalSymbolsReady(quint64 generation, const QStringList &files,
                               const QStringList &hardware, const QStringList &hardwareRoots,
                               const QStringList &aliases, bool hardwareKnown,
@@ -357,8 +360,10 @@ Backend::Backend(QObject *parent)
     , m_worker(new BackendWorker)
 {
     connect(m_worker, &BackendWorker::terminalCommandReady, this,
-        [this](quint64 generation, const QString &id, const QString &text, double elapsed, const QString &error) {
-            if (generation == m_terminalGeneration) emit terminalResponse(id, text, elapsed, error);
+        [this](quint64 generation, const QString &id, const QString &text,
+               const QString &stderrText, double elapsed, const QString &error) {
+            if (generation == m_terminalGeneration)
+                emit terminalResponse(id, text, stderrText, elapsed, error);
         });
     connect(m_worker, &BackendWorker::terminalSymbolsReady, this,
         [this](quint64 generation, const QStringList &files, const QStringList &hardware,
@@ -486,7 +491,7 @@ void Backend::disconnectFrom()
 void Backend::sendTerminalCommand(const QString &requestId, const QString &command)
 {
     if (m_connectionState != "connected" || m_busy) {
-        emit terminalResponse(requestId, {}, 0,
+        emit terminalResponse(requestId, {}, {}, 0,
                               Tr::tr(m_language, QStringLiteral("terminal.needConnected")));
         return;
     }

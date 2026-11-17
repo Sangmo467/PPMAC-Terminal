@@ -47,7 +47,8 @@ public:
     void setLanguage(const QString &lang);
 
 signals:
-    void terminalResponse(const QString &requestId, const QString &text, double elapsedMs, const QString &error);
+    void terminalResponse(const QString &requestId, const QString &text, const QString &stderrText,
+                          double elapsedMs, const QString &error);
     void terminalSymbolsChanged();
     void connectionStateChanged();
     void firmwareVersionChanged();

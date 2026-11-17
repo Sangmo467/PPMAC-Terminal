@@ -251,9 +251,12 @@ public:
                 backend = nullptr; updateState(); importSymbols();
             });
             backendConnections << connect(backend, &Backend::terminalResponse, this,
-                [this](const QString &id, const QString &text, double elapsed, const QString &error) {
+                [this](const QString &id, const QString &text, const QString &stderrText,
+                       double elapsed, const QString &error) {
                     if (!pending || id != pendingId) return;
                     pending = false; pendingId.clear();
+                    if (!stderrText.isEmpty()) for (const auto &line : stderrText.split('\n', Qt::SkipEmptyParts))
+                        append(line, TerminalColors::error);
                     if (!text.isEmpty()) for (const auto &line : text.split('\n'))
                         append(line, line.contains("error #", Qt::CaseInsensitive) ? TerminalColors::error : ((line.contains("warning", Qt::CaseInsensitive) || line.contains(QStringLiteral("警告"))) ? TerminalColors::message : TerminalColors::response));
                     if (!error.isEmpty()) append(error, TerminalColors::error);

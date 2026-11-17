@@ -408,7 +408,7 @@ void WatchPanel::setBackend(Backend *backend)
     d->pollTimer.stop();
     if (backend) {
         d->connections << connect(backend, &Backend::terminalResponse, this,
-            [this](const QString &id, const QString &text, double, const QString &error) {
+            [this](const QString &id, const QString &text, const QString &, double, const QString &error) {
                 auto it = d->inflight.find(id);
                 if (it == d->inflight.end()) return;
                 const int row = it.value();
