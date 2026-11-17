@@ -246,5 +246,11 @@
   "watch.showInput": "Eingabe anzeigen",
   "watch.hideInput": "Eingabe ausblenden",
   "watch.confirmQueryTitle": "Zurück zu Abfrage",
-  "watch.confirmQueryText": "Nach dem Zurückwandeln der Schaltfläche „%1“ in eine Abfrage zeigt die Zeile nur noch den Wert an und kann nicht mehr ausgeführt werden. Umwandeln?"
+  "watch.confirmQueryText": "Nach dem Zurückwandeln der Schaltfläche „%1“ in eine Abfrage zeigt die Zeile nur noch den Wert an und kann nicht mehr ausgeführt werden. Umwandeln?",
+  "watch.import": "Importieren…",
+  "watch.export": "Exportieren…",
+  "watch.importTitle": "Watch-Datei importieren",
+  "watch.exportTitle": "Watch-Datei exportieren",
+  "watch.importFailed": "Watch-Datei konnte nicht importiert werden: %1",
+  "watch.exportFailed": "Watch-Datei konnte nicht exportiert werden: %1"
 }

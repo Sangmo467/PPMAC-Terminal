@@ -8,9 +8,13 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
+#include <QSaveFile>
 #include <QScopeGuard>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QUuid>
+#include <QXmlStreamReader>
+#include <QXmlStreamWriter>
 
 namespace {
 constexpr int kPollFloorMs = 50;
@@ -71,6 +75,87 @@ QString queryErrorText(const QString &text, const QString &stderrText, const QSt
     if (stderrText.contains(QStringLiteral("error #"), Qt::CaseInsensitive)) return stderrText;
     if (text.contains(QStringLiteral("error #"), Qt::CaseInsensitive)) return text;
     return {};
+}
+
+struct WatchFileEntry {
+    QString request;
+    bool command = false;
+    int format = 0;
+    quint64 mask = ~quint64(0);
+};
+
+void readWatchFormat(QXmlStreamReader &xml, WatchFileEntry *entry)
+{
+    while (xml.readNextStartElement()) {
+        if (xml.name() == QLatin1String("Type")) {
+            const auto type = xml.readElementText().trimmed();
+            if (type.compare(QLatin1String("Float"), Qt::CaseInsensitive) == 0) entry->format = 1;
+            else if (type.compare(QLatin1String("Hex"), Qt::CaseInsensitive) == 0
+                     || type.compare(QLatin1String("Hexadecimal"), Qt::CaseInsensitive) == 0) entry->format = 2;
+            else if (type.startsWith(QLatin1String("Fixed"), Qt::CaseInsensitive)) entry->format = 3;
+            else if (type.startsWith(QLatin1String("Bin"), Qt::CaseInsensitive)) entry->format = 4;
+            else entry->format = 0;
+        } else if (xml.name() == QLatin1String("MaskString")) {
+            bool ok = false;
+            const auto mask = xml.readElementText().trimmed().toULongLong(&ok, 16);
+            if (ok) entry->mask = mask;
+        } else {
+            xml.skipCurrentElement();
+        }
+    }
+}
+
+WatchFileEntry readWatchEntry(QXmlStreamReader &xml)
+{
+    WatchFileEntry entry;
+    while (xml.readNextStartElement()) {
+        if (xml.name() == QLatin1String("Request")) entry.request = xml.readElementText().trimmed();
+        else if (xml.name() == QLatin1String("IsCommand")) {
+            const auto value = xml.readElementText().trimmed();
+            entry.command = value.compare(QLatin1String("true"), Qt::CaseInsensitive) == 0
+                || value == QLatin1String("1");
+        } else if (xml.name() == QLatin1String("FormatSettings")) readWatchFormat(xml, &entry);
+        else xml.skipCurrentElement();
+    }
+    return entry;
+}
+
+void readWatchSettings(QXmlStreamReader &xml, int *updateRate)
+{
+    while (xml.readNextStartElement()) {
+        if (xml.name() == QLatin1String("UpdateRate")) *updateRate = xml.readElementText().trimmed().toInt();
+        else xml.skipCurrentElement();
+    }
+}
+
+bool readWatchData(QXmlStreamReader &xml, QList<WatchFileEntry> *entries,
+                   int *updateRate, QString *error)
+{
+    bool rootFound = false;
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (!xml.isStartElement()) continue;
+        if (xml.name() == QLatin1String("WatchData")) { rootFound = true; continue; }
+        if (xml.name() == QLatin1String("WatchEntryItem")) {
+            auto entry = readWatchEntry(xml);
+            if (entry.request.isEmpty()) continue;
+            entries->append(std::move(entry));
+            if (entries->size() > kMaxWatchRows) {
+                if (error) *error = QStringLiteral("Watch entry count exceeds 100");
+                return false;
+            }
+        } else if (xml.name() == QLatin1String("Settings")) readWatchSettings(xml, updateRate);
+        else if (xml.name() != QLatin1String("WatchEntryItems")) xml.skipCurrentElement();
+    }
+    if (xml.hasError()) {
+        if (error) *error = xml.errorString();
+        return false;
+    }
+    if (!rootFound) {
+        if (error) *error = QStringLiteral("Missing WatchData root element");
+        return false;
+    }
+    return true;
 }
 
 // 支持鼠标拖动调整行序，Delete 删除选中行。
@@ -198,6 +283,7 @@ struct WatchPanel::Impl {
     QComboBox *periodCombo = nullptr;
     QCheckBox *pauseBox = nullptr;
     QLabel *titleLabel = nullptr, *periodLabel = nullptr;
+    QPushButton *importButton = nullptr, *exportButton = nullptr;
     QCheckBox *addAsButton = nullptr;
     QTableWidget *table = nullptr;
     int placeholderIndex = -1;
@@ -210,6 +296,7 @@ struct WatchPanel::Impl {
     QVector<quint64> masks;
     QVector<QString> raw;
     QVector<bool> pollingDisabled;
+    QVector<bool> responseErrors;
     HardwareConfig hardware;
     int periodMs = 100;
     bool updating = false;
@@ -230,7 +317,16 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
     layout->setContentsMargins(0, 0, 4, 0);
     d->titleLabel = new QLabel;
     d->titleLabel->setObjectName("watchTitle");
-    layout->addWidget(d->titleLabel);
+    d->importButton = new QPushButton;
+    d->importButton->setObjectName("watchImport");
+    d->exportButton = new QPushButton;
+    d->exportButton->setObjectName("watchExport");
+    auto *titleRow = new QHBoxLayout;
+    titleRow->addWidget(d->titleLabel);
+    titleRow->addStretch();
+    titleRow->addWidget(d->importButton);
+    titleRow->addWidget(d->exportButton);
+    layout->addLayout(titleRow);
 
     auto *options = new QHBoxLayout;
     d->periodLabel = new QLabel;
@@ -299,6 +395,8 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
         schedulePolling();
     });
     connect(d->pauseBox, &QCheckBox::toggled, this, [this] { schedulePolling(); });
+    connect(d->importButton, &QPushButton::clicked, this, &WatchPanel::importWatch);
+    connect(d->exportButton, &QPushButton::clicked, this, &WatchPanel::exportWatch);
     connect(d->table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem *item) {
         if (d->updating || !item || item->column() != 0) return;
         const int row = item->row();
@@ -444,6 +542,8 @@ void WatchPanel::setBackend(Backend *backend)
                 d->inflight.clear();
                 d->pollIds.clear();
                 d->watchdog.stop();
+            } else {
+                resetForNewConnection();
             }
             schedulePolling();
         });
@@ -464,9 +564,19 @@ void WatchPanel::setBackend(Backend *backend)
     schedulePolling();
 }
 
+void WatchPanel::resetForNewConnection()
+{
+    for (int row = 0; row < d->table->rowCount(); ++row) {
+        if (d->kinds.value(row) == RowKind::Query) d->pollingDisabled[row] = false;
+        if (d->responseErrors.value(row)) setResponse(row, QString(), false);
+    }
+}
+
 void WatchPanel::retranslate()
 {
     d->titleLabel->setText(t("watch.title"));
+    d->importButton->setText(t("watch.import"));
+    d->exportButton->setText(t("watch.export"));
     d->periodLabel->setText(t("watch.period"));
     d->pauseBox->setText(t("watch.pause"));
     d->addAsButton->setText(t("watch.addAsButton"));
@@ -572,6 +682,7 @@ void WatchPanel::addRow(const QString &request, bool asButton)
         d->masks.append(~quint64(0));
         d->raw.append(QString());
         d->pollingDisabled.append(false);
+        d->responseErrors.append(false);
     } else {
         d->table->item(row, 0)->setText(text);
         if (auto *response = d->table->item(row, 1)) response->setText(QString());
@@ -580,6 +691,7 @@ void WatchPanel::addRow(const QString &request, bool asButton)
         d->masks[row] = ~quint64(0);
         d->raw[row].clear();
         d->pollingDisabled[row] = false;
+        d->responseErrors[row] = false;
     }
     d->updating = false;
     // 显式勾选“添加为按钮”即视为已确认，直接按按钮行创建。
@@ -640,6 +752,7 @@ void WatchPanel::ensurePlaceholder()
     d->masks.append(~quint64(0));
     d->raw.append(QString());
     d->pollingDisabled.append(false);
+    d->responseErrors.append(false);
     d->updating = false;
     d->placeholderIndex = row;
 }
@@ -706,6 +819,7 @@ void WatchPanel::removeRow(int row)
     d->masks.removeAt(row);
     d->raw.removeAt(row);
     d->pollingDisabled.removeAt(row);
+    d->responseErrors.removeAt(row);
     d->updating = false;
     if (d->pollIds.isEmpty()) d->watchdog.stop();
     ensurePlaceholder();
@@ -732,6 +846,7 @@ void WatchPanel::moveRow(int from, int to)
     const auto format = d->formats.value(from);
     const auto mask = d->masks.value(from);
     const auto pollingDisabled = d->pollingDisabled.value(from);
+    const auto responseError = d->responseErrors.value(from);
     for (auto it = d->inflight.begin(); it != d->inflight.end(); ++it) {
         int &value = it.value();
         if (value == from) value = to;
@@ -760,6 +875,7 @@ void WatchPanel::moveRow(int from, int to)
     d->masks.removeAt(from); d->masks.insert(to, mask);
     d->raw.removeAt(from); d->raw.insert(to, raw);
     d->pollingDisabled.removeAt(from); d->pollingDisabled.insert(to, pollingDisabled);
+    d->responseErrors.removeAt(from); d->responseErrors.insert(to, responseError);
     d->updating = false;
     if (kind == RowKind::Button) attachButton(to, request);
     applyFormat(to);
@@ -771,6 +887,7 @@ void WatchPanel::moveRow(int from, int to)
 void WatchPanel::setResponse(int row, const QString &text, bool error)
 {
     if (row < 0 || row >= d->table->rowCount()) return;
+    d->responseErrors[row] = error;
     if (row < d->raw.size()) d->raw[row] = text;
     auto *item = d->table->item(row, 1);
     if (!item) return;
@@ -946,6 +1063,132 @@ int WatchPanel::queryRowCount() const
     return count;
 }
 
+void WatchPanel::importWatch()
+{
+    const auto path = QFileDialog::getOpenFileName(this, t("watch.importTitle"), QString(),
+                                                   QStringLiteral("Watch (*.wtb);;XML (*.xml)"));
+    if (path.isEmpty()) return;
+    QString error;
+    if (!importFile(path, &error))
+        QMessageBox::warning(this, t("watch.importTitle"), t("watch.importFailed").arg(error));
+}
+
+void WatchPanel::exportWatch()
+{
+    const auto path = QFileDialog::getSaveFileName(this, t("watch.exportTitle"), QStringLiteral("watch.wtb"),
+                                                   QStringLiteral("Watch (*.wtb);;XML (*.xml)"));
+    if (path.isEmpty()) return;
+    QString error;
+    if (!exportFile(path, &error))
+        QMessageBox::warning(this, t("watch.exportTitle"), t("watch.exportFailed").arg(error));
+}
+
+bool WatchPanel::importFile(const QString &path, QString *error)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error) *error = file.errorString();
+        return false;
+    }
+    QXmlStreamReader xml(&file);
+    QList<WatchFileEntry> entries;
+    int updateRate = 0;
+    if (!readWatchData(xml, &entries, &updateRate, error)) return false;
+
+    d->pollTimer.stop();
+    d->watchdog.stop();
+    d->inflight.clear();
+    d->pollIds.clear();
+    d->table->setRowCount(0);
+    d->kinds.clear();
+    d->formats.clear();
+    d->masks.clear();
+    d->raw.clear();
+    d->pollingDisabled.clear();
+    d->responseErrors.clear();
+    d->placeholderIndex = -1;
+    ensurePlaceholder();
+    for (const auto &entry : entries) {
+        addRow(entry.request, entry.command);
+        for (int row = 0; row < d->table->rowCount(); ++row) {
+            if (rowRequest(row).compare(entry.request, Qt::CaseInsensitive) != 0) continue;
+            d->formats[row] = static_cast<Impl::Format>(entry.format);
+            d->masks[row] = entry.mask;
+            applyFormat(row);
+            break;
+        }
+    }
+    if (updateRate > 0) {
+        const int period = qMax(kPollFloorMs, updateRate);
+        int index = d->periodCombo->findData(period);
+        if (index < 0) {
+            d->periodCombo->addItem(QStringLiteral("%1 s").arg(period / 1000.0), period);
+            index = d->periodCombo->count() - 1;
+        }
+        d->periodCombo->setCurrentIndex(index);
+    }
+    retranslate();
+    schedulePolling();
+    return true;
+}
+
+bool WatchPanel::exportFile(const QString &path, QString *error) const
+{
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        if (error) *error = file.errorString();
+        return false;
+    }
+    QXmlStreamWriter xml(&file);
+    xml.setAutoFormatting(true);
+    xml.setAutoFormattingIndent(2);
+    xml.writeStartDocument();
+    xml.writeStartElement(QStringLiteral("WatchData"));
+    xml.writeAttribute(QStringLiteral("xmlns:xsi"), QStringLiteral("http://www.w3.org/2001/XMLSchema-instance"));
+    xml.writeAttribute(QStringLiteral("xmlns:xsd"), QStringLiteral("http://www.w3.org/2001/XMLSchema"));
+    xml.writeStartElement(QStringLiteral("WatchEntryItems"));
+    for (int row = 0; row < d->table->rowCount(); ++row) {
+        const auto request = rowRequest(row).trimmed();
+        if (request.isEmpty()) continue;
+        const bool command = d->kinds.value(row) == RowKind::Button;
+        xml.writeStartElement(QStringLiteral("WatchEntryItem"));
+        xml.writeTextElement(QStringLiteral("Request"), request);
+        xml.writeTextElement(QStringLiteral("Response"), d->raw.value(row));
+        xml.writeTextElement(QStringLiteral("IsCommand"), command ? QStringLiteral("true") : QStringLiteral("false"));
+        xml.writeTextElement(QStringLiteral("Comment"), QString());
+        xml.writeTextElement(QStringLiteral("IsResponseHavingError"),
+                             d->responseErrors.value(row) ? QStringLiteral("true") : QStringLiteral("false"));
+        xml.writeStartElement(QStringLiteral("FormatSettings"));
+        const char *types[] = {"None", "Float", "Hex", "Fixed", "Binary"};
+        xml.writeTextElement(QStringLiteral("Type"), QString::fromLatin1(types[qBound(0, int(d->formats.value(row)), 4)]));
+        xml.writeTextElement(QStringLiteral("Scale"), QStringLiteral("1"));
+        xml.writeTextElement(QStringLiteral("DecimalPlaces"), QStringLiteral("3"));
+        xml.writeTextElement(QStringLiteral("MaskString"),
+                             QStringLiteral("0x") + QString::number(d->masks.value(row), 16).toUpper());
+        xml.writeTextElement(QStringLiteral("BitCount"), d->masks.value(row) > 0xffffffffULL ? QStringLiteral("64") : QStringLiteral("32"));
+        xml.writeTextElement(QStringLiteral("StartingBitIndex"), QStringLiteral("0"));
+        xml.writeTextElement(QStringLiteral("IsAddingCommaAfterEvery4Bits"), QStringLiteral("false"));
+        xml.writeEndElement();
+        xml.writeEndElement();
+    }
+    xml.writeEndElement();
+    xml.writeStartElement(QStringLiteral("Settings"));
+    xml.writeTextElement(QStringLiteral("UpdateRate"), QString::number(d->periodMs));
+    xml.writeTextElement(QStringLiteral("EchoMode"), QStringLiteral("7"));
+    xml.writeTextElement(QStringLiteral("IsShowingResponseTime"), QStringLiteral("true"));
+    xml.writeTextElement(QStringLiteral("IsDisplayingComment"), QStringLiteral("false"));
+    xml.writeTextElement(QStringLiteral("IsPrependFormatting"), QStringLiteral("false"));
+    xml.writeTextElement(QStringLiteral("IsWatchLocked"), QStringLiteral("false"));
+    xml.writeEndElement();
+    xml.writeEndElement();
+    xml.writeEndDocument();
+    if (xml.hasError() || !file.commit()) {
+        if (error) *error = file.errorString();
+        return false;
+    }
+    return true;
+}
+
 int WatchPanel::loadTestSymbols(const QByteArray &json)
 {
     if (!d->handle) return PMACT_INVALID_ARGUMENT;
@@ -994,8 +1237,60 @@ int WatchPanel::smokeTest()
     respond(QStringLiteral("P=1"),
             QStringLiteral("stdin:5:2: error #20: ILLEGAL CMD: PollingErrorRetry"), {});
     if (!d->pollingDisabled.value(queryRow) || queryRowCount() != activeBefore - 1) return 7;
+    resetForNewConnection();
+    if (d->responseErrors.value(queryRow) || d->pollingDisabled.value(queryRow)
+        || !rowResponseForTest(queryRow).isEmpty() || queryRowCount() != activeBefore) return 10;
+    setResponse(queryRow, QStringLiteral("P=42"), false);
+    resetForNewConnection();
+    if (rowResponseForTest(queryRow) != QStringLiteral("42")) return 11;
     removeRow(queryRow);
-    qInfo() << "Watch polling: 50 ms option, per-row error stop and edit retry passed";
+    qInfo() << "Watch polling: 50 ms, error stop/retry and new-connection reset passed";
+
+    QTemporaryDir watchFiles;
+    if (!watchFiles.isValid()) return 12;
+    const auto inputPath = watchFiles.filePath(QStringLiteral("input.wtb"));
+    const auto exportPath = watchFiles.filePath(QStringLiteral("export.wtb"));
+    const QByteArray inputXml = R"xml(<WatchData><WatchEntryItems>
+<WatchEntryItem><Request>Sys.ServoCount</Request><IsCommand>false</IsCommand><FormatSettings><Type>None</Type><MaskString>0xFFFFFFFF</MaskString></FormatSettings></WatchEntryItem>
+<WatchEntryItem><Request>#1p</Request><IsCommand>false</IsCommand><FormatSettings><Type>Float</Type><MaskString>0xFFFFFFFF</MaskString></FormatSettings></WatchEntryItem>
+<WatchEntryItem><Request>Motor[11].MasterCtrl=0 #1K</Request><IsCommand>true</IsCommand><FormatSettings><Type>None</Type><MaskString>0xFFFFFFFF</MaskString></FormatSettings></WatchEntryItem>
+</WatchEntryItems><Settings><UpdateRate>50</UpdateRate></Settings></WatchData>)xml";
+    QFile input(inputPath);
+    if (!input.open(QIODevice::WriteOnly) || input.write(inputXml) != inputXml.size()) return 13;
+    input.close();
+    QString fileError;
+    if (!importFile(inputPath, &fileError)) {
+        qWarning() << "Watch import regression:" << fileError;
+        return 14;
+    }
+    if (realRowCount() != 3 || rowRequestForTest(0) != QStringLiteral("Sys.ServoCount")
+        || rowRequestForTest(1) != QStringLiteral("#1p") || rowKindForTest(2) != int(RowKind::Button)
+        || d->formats.value(1) != Impl::Format::Float || d->periodMs != 50) return 15;
+    if (!exportFile(exportPath, &fileError)) return 16;
+    QFile exported(exportPath);
+    if (!exported.open(QIODevice::ReadOnly)) return 17;
+    const auto exportedXml = exported.readAll();
+    if (!exportedXml.contains("<UpdateRate>50</UpdateRate>")
+        || !exportedXml.contains("<Type>Float</Type>")
+        || !exportedXml.contains("Motor[11].MasterCtrl=0 #1K")) return 18;
+    exported.close();
+    if (!importFile(exportPath, &fileError) || realRowCount() != 3) return 19;
+    const auto malformedPath = watchFiles.filePath(QStringLiteral("malformed.wtb"));
+    QFile malformed(malformedPath);
+    if (!malformed.open(QIODevice::WriteOnly) || malformed.write("<WatchData>") < 0) return 20;
+    malformed.close();
+    if (importFile(malformedPath, &fileError) || realRowCount() != 3) return 21;
+    const auto compatibilityFile = qEnvironmentVariable("PMAC_WATCH_TEST_FILE");
+    if (!compatibilityFile.isEmpty()) {
+        if (!importFile(compatibilityFile, &fileError) || realRowCount() == 0
+            || rowRequestForTest(0) != QStringLiteral("Sys.ServoCount")
+            || d->formats.value(1) != Impl::Format::Float || d->periodMs != 50) {
+            qWarning() << "Watch compatibility regression:" << compatibilityFile << fileError;
+            return 22;
+        }
+        qInfo() << "Watch WTB compatibility:" << compatibilityFile << "entries" << realRowCount();
+    }
+    qInfo() << "Watch WTB: import, export, round-trip and malformed-file preservation passed";
 
     // Exercise actual display formatting, including integers beyond double's
     // exact range and values that cannot safely be converted to 64-bit bits.

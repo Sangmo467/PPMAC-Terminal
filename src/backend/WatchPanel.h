@@ -49,6 +49,7 @@ private:
     int placeholderRow() const;
     int realRowCount() const;
     void ensurePlaceholder();
+    void resetForNewConnection();
     void setResponse(int row, const QString &text, bool error);
     void applyFormat(int row);
     void chooseFormat(int row);
@@ -58,4 +59,8 @@ private:
     void schedulePolling();
     void pollTick();
     int queryRowCount() const;
+    void importWatch();
+    void exportWatch();
+    bool importFile(const QString &path, QString *error);
+    bool exportFile(const QString &path, QString *error) const;
 };

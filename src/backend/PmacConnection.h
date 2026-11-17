@@ -39,11 +39,27 @@ public:
         std::string stderrText;
     };
 
-    // 使用 SDK 默认执行超时（包括复位命令的加长预算），只缩短单次等待以响应退出。
+    static uint32_t extendedTimeoutMs(const std::string &command)
+    {
+        const auto text = QString::fromUtf8(command.data(), qsizetype(command.size())).simplified();
+        return text.compare(QLatin1String("ecat reset"), Qt::CaseInsensitive) == 0
+                || text.compare(QLatin1String("ecat rescan"), Qt::CaseInsensitive) == 0
+            ? 20000 : 0;
+    }
+
+    // ECAT 维护命令使用 20 秒；其他命令保留 SDK 默认及 $$$ 的加长预算。
     Response getResponseWithStderr(const std::string &command, const std::string &pattern = "")
     {
         checkInterrupted();
-        auto request = m_client.getResponseAsync(command);
+        pmac::Request request;
+        const auto timeoutMs = extendedTimeoutMs(command);
+        if (timeoutMs != 0) {
+            pmac::RequestOptions options;
+            options.timeoutMs = timeoutMs;
+            request = m_client.getResponseAsync(command, options);
+        } else {
+            request = m_client.getResponseAsync(command);
+        }
         wait(request);
         const auto bytes = pattern.empty() ? request.response() : request.match(pattern);
         const auto diagnostics = request.stderrBytes();

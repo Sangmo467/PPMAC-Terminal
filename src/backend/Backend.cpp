@@ -516,6 +516,11 @@ void Backend::refreshTerminalSymbols()
 // 只使用本机临时端口，不连接控制器或发送 PMAC 命令。
 int Backend::shutdownSmokeTest()
 {
+    if (PmacConnection::extendedTimeoutMs("ecat reset") != 20000) return 20;
+    if (PmacConnection::extendedTimeoutMs("  ECAT \t ReScAn  ") != 20000) return 21;
+    if (PmacConnection::extendedTimeoutMs("P1") != 0) return 22;
+    if (PmacConnection::extendedTimeoutMs("$$$") != 0) return 23;
+    qInfo() << "ECAT reset/rescan: 20 s timeout; other commands retain SDK defaults";
     QSemaphore listening, accepted, recovering;
     std::atomic<uint16_t> port{0};
     std::atomic_int connections{0}, emissions{0};

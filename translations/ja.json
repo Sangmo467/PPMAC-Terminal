@@ -246,5 +246,11 @@
   "watch.showInput": "入力を表示",
   "watch.hideInput": "入力を隠す",
   "watch.confirmQueryTitle": "クエリに戻す",
-  "watch.confirmQueryText": "ボタン「%1」をクエリに戻すと、この行は取得値の表示のみとなり、クリック実行できなくなります。変換しますか？"
+  "watch.confirmQueryText": "ボタン「%1」をクエリに戻すと、この行は取得値の表示のみとなり、クリック実行できなくなります。変換しますか？",
+  "watch.import": "インポート…",
+  "watch.export": "エクスポート…",
+  "watch.importTitle": "Watch ファイルのインポート",
+  "watch.exportTitle": "Watch ファイルのエクスポート",
+  "watch.importFailed": "Watch ファイルをインポートできません：%1",
+  "watch.exportFailed": "Watch ファイルをエクスポートできません：%1"
 }

@@ -246,5 +246,11 @@
   "watch.showInput": "Mostrar entrada",
   "watch.hideInput": "Ocultar entrada",
   "watch.confirmQueryTitle": "Volver a consulta",
-  "watch.confirmQueryText": "Tras convertir el botón “%1” de nuevo en consulta, la fila solo mostrará el valor y ya no se podrá ejecutar. ¿Convertir?"
+  "watch.confirmQueryText": "Tras convertir el botón “%1” de nuevo en consulta, la fila solo mostrará el valor y ya no se podrá ejecutar. ¿Convertir?",
+  "watch.import": "Importar…",
+  "watch.export": "Exportar…",
+  "watch.importTitle": "Importar archivo Watch",
+  "watch.exportTitle": "Exportar archivo Watch",
+  "watch.importFailed": "No se pudo importar el archivo Watch: %1",
+  "watch.exportFailed": "No se pudo exportar el archivo Watch: %1"
 }

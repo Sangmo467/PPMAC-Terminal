@@ -246,5 +246,11 @@
   "watch.showInput": "इनपुट दिखाएँ",
   "watch.hideInput": "इनपुट छिपाएँ",
   "watch.confirmQueryTitle": "वापस क्वेरी में बदलें",
-  "watch.confirmQueryText": "बटन “%1” को वापस क्वेरी में बदलने के बाद यह पंक्ति केवल मान दिखाएगी और क्लिक पर नहीं चलेगी। बदलें?"
+  "watch.confirmQueryText": "बटन “%1” को वापस क्वेरी में बदलने के बाद यह पंक्ति केवल मान दिखाएगी और क्लिक पर नहीं चलेगी। बदलें?",
+  "watch.import": "आयात…",
+  "watch.export": "निर्यात…",
+  "watch.importTitle": "Watch फ़ाइल आयात करें",
+  "watch.exportTitle": "Watch फ़ाइल निर्यात करें",
+  "watch.importFailed": "Watch फ़ाइल आयात नहीं किया जा सका: %1",
+  "watch.exportFailed": "Watch फ़ाइल निर्यात नहीं किया जा सका: %1"
 }

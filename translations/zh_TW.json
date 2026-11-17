@@ -246,5 +246,11 @@
   "watch.showInput": "顯示輸入",
   "watch.hideInput": "隱藏輸入",
   "watch.confirmQueryTitle": "轉回查詢",
-  "watch.confirmQueryText": "將按鈕「%1」轉回查詢後，該列只顯示查詢值，不再可點擊執行。確認轉換？"
+  "watch.confirmQueryText": "將按鈕「%1」轉回查詢後，該列只顯示查詢值，不再可點擊執行。確認轉換？",
+  "watch.import": "匯入…",
+  "watch.export": "匯出…",
+  "watch.importTitle": "匯入 Watch 檔案",
+  "watch.exportTitle": "匯出 Watch 檔案",
+  "watch.importFailed": "無法匯入 Watch 檔案：%1",
+  "watch.exportFailed": "無法匯出 Watch 檔案：%1"
 }

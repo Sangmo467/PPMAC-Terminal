@@ -10,7 +10,7 @@ PMAC 通信使用 `pmac.dll`（PMAC 2.0.10 MSVC x64 SDK）。
 - PMAC 连接、断开、固件版本与连接状态显示
 - 多标签终端：历史、复制/清空/导出/日志/字体/打印
 - 命令提词器：数组、成员、Gate/Chan、全局变量、程序、局部变量与帮助提示
-- Watch 面板：周期查询、拖动排序、查询行/按钮行、浮点/十六进制/定点/二进制掩码显示
+- Watch 面板：周期查询、拖动排序、查询行/按钮行、浮点/十六进制/定点/二进制掩码显示、`.wtb` 导入/导出
 - 8 种界面语言（简体中文、繁體中文、English、हिन्दी、日本語、Español、Deutsch、Français）
 
 ## 目录说明
@@ -83,8 +83,8 @@ cmake --build build --parallel
 1. 下载 PMAC 2.0.10 对应平台 SDK Release；
 2. 编译 `third_party/pmac-terminal-rs` 终端核心；
 3. 构建并部署应用，上传产物：
-   - `PmacTerminal-windows-x64`（`PmacTerminal-1.0.6-windows-x64.zip`）
-   - `PmacTerminal-macos-arm64`（`PmacTerminal-1.0.6-macos-arm64.zip`，内含 `.app`）
+   - `PmacTerminal-windows-x64`（`PmacTerminal-1.0.7-windows-x64.zip`）
+   - `PmacTerminal-macos-arm64`（`PmacTerminal-1.0.7-macos-arm64.zip`，内含 `.app`）
 
 macOS 产物未使用开发者证书签名（仅 ad-hoc）。首次运行若被 Gatekeeper 拦截，
 可右键“打开”，或执行 `xattr -dr com.apple.quarantine <app 路径>`。

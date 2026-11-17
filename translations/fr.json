@@ -246,5 +246,11 @@
   "watch.showInput": "Afficher la saisie",
   "watch.hideInput": "Masquer la saisie",
   "watch.confirmQueryTitle": "Reconvertir en requête",
-  "watch.confirmQueryText": "Après reconversion du bouton « %1 » en requête, la ligne affichera seulement la valeur et ne pourra plus s’exécuter. Convertir ?"
+  "watch.confirmQueryText": "Après reconversion du bouton « %1 » en requête, la ligne affichera seulement la valeur et ne pourra plus s’exécuter. Convertir ?",
+  "watch.import": "Importer…",
+  "watch.export": "Exporter…",
+  "watch.importTitle": "Importer un fichier Watch",
+  "watch.exportTitle": "Exporter le fichier Watch",
+  "watch.importFailed": "Impossible d’importer le fichier Watch : %1",
+  "watch.exportFailed": "Impossible d’exporter le fichier Watch : %1"
 }

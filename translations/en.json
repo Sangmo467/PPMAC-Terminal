@@ -246,5 +246,11 @@
   "watch.showInput": "Show input",
   "watch.hideInput": "Hide input",
   "watch.confirmQueryTitle": "Convert back to query",
-  "watch.confirmQueryText": "After converting button “%1” back to a query, the row only displays the queried value and can no longer execute. Convert?"
+  "watch.confirmQueryText": "After converting button “%1” back to a query, the row only displays the queried value and can no longer execute. Convert?",
+  "watch.import": "Import…",
+  "watch.export": "Export…",
+  "watch.importTitle": "Import Watch file",
+  "watch.exportTitle": "Export Watch file",
+  "watch.importFailed": "Unable to import Watch file: %1",
+  "watch.exportFailed": "Unable to export Watch file: %1"
 }

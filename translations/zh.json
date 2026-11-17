@@ -246,5 +246,11 @@
   "watch.showInput": "显示输入",
   "watch.hideInput": "隐藏输入",
   "watch.confirmQueryTitle": "转回查询",
-  "watch.confirmQueryText": "将按钮“%1”转回查询后，该行只显示查询值，不再可点击执行。确认转换？"
+  "watch.confirmQueryText": "将按钮“%1”转回查询后，该行只显示查询值，不再可点击执行。确认转换？",
+  "watch.import": "导入…",
+  "watch.export": "导出…",
+  "watch.importTitle": "导入 Watch 文件",
+  "watch.exportTitle": "导出 Watch 文件",
+  "watch.importFailed": "无法导入 Watch 文件：%1",
+  "watch.exportFailed": "无法导出 Watch 文件：%1"
 }
