@@ -628,7 +628,11 @@ int TerminalPage::focusSmokeTest()
         for (int i = 0; i < fields.size(); ++i) fields[i]->setProperty("text", savedText[i]);
         command->clear();
     });
+    // 路由测试不依赖 CI 桌面的前台窗口权限或显示器分辨率。
+    shell->setMinimumSize(1920, 1080);
+    shell->resize(1920, 1080);
     shell->activateWindow();
+    QApplication::setActiveWindow(shell);
     QApplication::processEvents();
     const auto click = [&](const QPoint &position, bool doubleClick = false) {
         const auto global = shell->mapToGlobal(position);
@@ -656,7 +660,14 @@ int TerminalPage::focusSmokeTest()
         command->clear();
         click(fieldPosition);
         type(Qt::Key_1, "1");
-        if (field->property("text").toString() != "1" || !command->toPlainText().isEmpty()) return 4;
+        if (field->property("text").toString() != "1" || !command->toPlainText().isEmpty()) {
+            qWarning() << "Connection field input failed:" << field->objectName()
+                       << "cycle" << cycle << "click" << fieldPosition
+                       << "shell size" << shell->size() << "active" << shell->isActiveWindow()
+                       << "widget focus" << QApplication::focusWidget()
+                       << "QML focus matches" << (window()->activeFocusItem() == field);
+            return 4;
+        }
         click(command->viewport()->mapTo(shell, QPoint(15, command->viewport()->height() / 2)));
         type(Qt::Key_X, "x");
         command->hideCompletion();
