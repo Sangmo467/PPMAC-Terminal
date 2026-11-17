@@ -63,7 +63,14 @@ impl Snapshot {
                 .first()
                 .and_then(|l| l.iter().find(|e| e.name.eq_ignore_ascii_case(first)))
             {
-                if !e.alias.is_empty() && !e.alias.eq_ignore_ascii_case("null") {
+                if !e.alias.is_empty()
+                    && !e.alias.eq_ignore_ascii_case("null")
+                    && self.levels.first().is_some_and(|roots| {
+                        roots
+                            .iter()
+                            .any(|root| root.name.eq_ignore_ascii_case(&e.alias))
+                    })
+                {
                     *first = e.alias.clone();
                 }
             }
@@ -166,6 +173,57 @@ mod tests {
         assert_eq!(normalize("Gate1[3]"), "Gate1[]");
     }
     #[test]
+    fn aliases_must_name_known_root() {
+        let s = Snapshot {
+            levels: vec![
+                vec![
+                    Entry {
+                        name: "Plc[]".into(),
+                        alias: "Editor".into(),
+                        ..Default::default()
+                    },
+                    Entry {
+                        name: "Gate3[]".into(),
+                        ..Default::default()
+                    },
+                    Entry {
+                        name: "CK3WAX[]".into(),
+                        alias: "Gate3[]".into(),
+                        ..Default::default()
+                    },
+                    Entry {
+                        name: "CK3A[]".into(),
+                        alias: "Gate3[]".into(),
+                        ..Default::default()
+                    },
+                    Entry {
+                        name: "CK3C[]".into(),
+                        alias: "Gate3[]".into(),
+                        ..Default::default()
+                    },
+                ],
+                vec![
+                    Entry {
+                        name: "Ldata".into(),
+                        parent: "Plc[]".into(),
+                        ..Default::default()
+                    },
+                    Entry {
+                        name: "EncCtrl".into(),
+                        parent: "Gate3[]".into(),
+                        ..Default::default()
+                    },
+                ],
+            ],
+            ..Default::default()
+        };
+        assert_eq!(s.suggest("Plc[1].")[0].name, "Ldata");
+        assert_eq!(s.suggest("CK3WAX[2].")[0].name, "EncCtrl");
+        assert_eq!(s.suggest("CK3A[3].")[0].name, "EncCtrl");
+        assert_eq!(s.suggest("CK3C[3].")[0].name, "EncCtrl");
+        assert!(s.suggest("Editor[1].").is_empty());
+    }
+    #[test]
     fn no_cross_parent() {
         assert!(fixture().suggest("Nope[1].P").is_empty());
     }
@@ -230,12 +288,16 @@ mod robustness {
 
 /// Cursor position in Unicode characters after accepting a completion.
 pub fn insertion_cursor(candidate: &str) -> usize {
-    candidate.find("[]").map(|i| candidate[..i].chars().count() + 1)
+    candidate
+        .find("[]")
+        .map(|i| candidate[..i].chars().count() + 1)
         .unwrap_or_else(|| candidate.chars().count())
 }
-#[cfg(test)] mod cursor_tests {
+#[cfg(test)]
+mod cursor_tests {
     use super::*;
-    #[test] fn empty_array_focus() {
+    #[test]
+    fn empty_array_focus() {
         assert_eq!(insertion_cursor("Motor[]"), 6);
         assert_eq!(insertion_cursor("Chan[]"), 5);
         assert_eq!(insertion_cursor("中文🙂[]"), 4);

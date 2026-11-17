@@ -196,10 +196,8 @@ public:
                     if (result.second) aliasInstances << aliasName;
                     checkedAny = checkedAny || result.first;
                 }
-                if (checkedAny) {
-                    hardwareRoots << def.name.toLower();
-                    aliasPairs << def.name + QLatin1Char('=') + def.target;
-                }
+                aliasPairs << def.name + QLatin1Char('=') + def.target;
+                if (checkedAny) hardwareRoots << def.name.toLower();
             }
             hardwareRoots.removeDuplicates();
             hardware = gates;

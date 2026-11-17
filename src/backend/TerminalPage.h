@@ -18,6 +18,7 @@ public:
     Q_INVOKABLE void newSession();
     Q_INVOKABLE int smokeTest();
     Q_INVOKABLE int focusSmokeTest();
+    int deviceCompletionSmokeTest();
 signals:
     void backendChanged();
 private:

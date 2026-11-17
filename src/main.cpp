@@ -99,10 +99,10 @@ static int runWidgetShell(QApplication &app)
                 input->setPlainText(QStringLiteral("sefsoefunha"));
                 QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier, "\r");
                 QApplication::sendEvent(input, &enter);
-                QTimer::singleShot(3000, &app, [&, output] {
+                QTimer::singleShot(3000, &app, [&, output, terminal] {
                     qInfo().noquote() << "OUTPUT>>";
                     if (output) qInfo().noquote() << output->toPlainText();
-                    app.exit(0);
+                    app.exit(terminal->deviceCompletionSmokeTest());
                 });
             });
             poll->start();

@@ -683,6 +683,9 @@ fn read_only_test() -> Result<(), String> {
         ("Motor[1].Servo", "ServoCtrl"),
         ("Sys.Servo", "ServoTime"),
         ("Gate3[0].Chan[0].", "EncCtrl"),
+        ("Plc[1].", "Ldata"),
+        ("CK3A[3].", "Chan[]"),
+        ("CK3C[3].", "Chan[]"),
     ] {
         let suggestions = snapshot.suggest(prefix);
         if !suggestions.iter().any(|s| s.name == expected) {

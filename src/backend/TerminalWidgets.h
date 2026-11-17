@@ -164,13 +164,15 @@ inline QStringList completionChoices(const QString &prefix, const QString &candi
     const auto parent = dot >= 0 ? token.left(dot) : QString();
     static const QRegularExpression re(
         QStringLiteral("^([A-Za-z_][A-Za-z0-9_]*)\\[([^\\]]*)\\]?$"));
-    // 父路径指向不存在的 Gate 实例时不再给出成员（如 Gate3[0].）。
+    // Gate 实例按探测结果过滤；硬件别名可能不支持 PartNum，交给等效结构映射。
     if (hardware && hardware->valid && !parent.isEmpty()) {
         const auto first = parent.section(QLatin1Char('.'), 0, 0);
         const auto root = re.match(first);
-        if (root.hasMatch() && hardware->hardwareRoots.contains(root.captured(1).toLower())) {
+        const auto rootName = root.captured(1).toLower();
+        if (root.hasMatch() && hardware->hardwareRoots.contains(rootName)
+            && !hardware->aliases.contains(rootName)) {
             bool exists = false;
-            for (const auto &instance : hardware->top.value(root.captured(1).toLower()))
+            for (const auto &instance : hardware->top.value(rootName))
                 if (instance.compare(first, Qt::CaseInsensitive) == 0) { exists = true; break; }
             if (!exists) return {};
         }

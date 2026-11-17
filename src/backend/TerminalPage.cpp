@@ -462,6 +462,14 @@ int TerminalPage::smokeTest()
     if (static_cast<Terminal *>(page)->loadTestSymbols(symbolJson) != PMACT_OK) return 18;
     if (!command->complete("Mot").contains("Motor[]")) return 19;
     if (!command->complete("Motor[1].Act").contains("ActPos")) return 20;
+    HardwareConfig aliasHardware;
+    aliasHardware.setInstances({}, {"gate3", "ck3a", "ck3c"},
+                               {"CK3A=Gate3", "CK3C=Gate3"}, true);
+    for (const auto &prefix : {QStringLiteral("CK3A[3]."), QStringLiteral("CK3C[3].")}) {
+        if (aliasHardware.rewriteAlias(prefix) != QStringLiteral("Gate3[3].")) return 122;
+        if (!completionChoices(prefix, QStringLiteral("Chan[]"), &aliasHardware)
+            .contains(QStringLiteral("Chan[]"))) return 123;
+    }
     int dollarSubmissions = 0, pulses = 0;
     const auto originalSubmit = command->submit;
     command->submit = [&] { ++dollarSubmissions; };
@@ -582,6 +590,19 @@ int TerminalPage::smokeTest()
     setVisible(true);
     syncHost();
     qInfo() << "Focus ownership: QML input is not replaced by cached terminal focus";
+    return 0;
+}
+int TerminalPage::deviceCompletionSmokeTest()
+{
+    if (!d->watch) return 22;
+    const struct { const char *prefix; const char *expected; } checks[] = {
+        {"Plc[1].", "Ldata"}, {"CK3A[3].", "Chan[]"}, {"CK3C[3].", "Chan[]"}
+    };
+    for (const auto &check : checks) {
+        const auto choices = d->watch->suggestForTest(QString::fromLatin1(check.prefix));
+        qInfo() << "COMPLETION" << check.prefix << choices;
+        if (!choices.contains(QString::fromLatin1(check.expected))) return 23;
+    }
     return 0;
 }
 void TerminalPage::retranslate()
