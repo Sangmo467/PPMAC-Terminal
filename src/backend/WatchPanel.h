@@ -21,6 +21,7 @@ public:
     void retranslate();
 
     // 离线自检入口
+    int smokeTest();
     int loadTestSymbols(const QByteArray &json);
     void addRowForTest(const QString &request);
     void removeRowForTest(int row) { removeRow(row); }

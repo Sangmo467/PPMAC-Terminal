@@ -1,7 +1,8 @@
 # PmacTerminal
 
 从 SetupTool 中独立提取的 PMAC 终端程序：顶部连接栏 + 多标签终端 + 左侧 Watch 面板。
-界面使用 Qt 6 / QML 外壳，终端为原生 QWidget，命令补全由 Rust 编写的 `pmac-terminal-rs` 提供，
+界面使用 Qt 6 / QML 外壳，终端为原生 QWidget；macOS 通过 QQuickWidget 将连接栏、终端和 Watch
+纳入同一个 QWidget 窗口的焦点链。命令补全由 Rust 编写的 `pmac-terminal-rs` 提供，
 PMAC 通信使用 `pmac.dll`（PMAC 2.0.7 MSVC x64 SDK）。
 
 ## 功能
@@ -82,15 +83,18 @@ cmake --build build --parallel
 1. 下载 PMAC 2.0.7 对应平台 SDK Release；
 2. 编译 `third_party/pmac-terminal-rs` 终端核心；
 3. 构建并部署应用，上传产物：
-   - `PmacTerminal-windows-x64`（`PmacTerminal-2.0.7-windows-x64.zip`）
-   - `PmacTerminal-macos-arm64`（`PmacTerminal-2.0.7-macos-arm64.zip`，内含 `.app`）
+   - `PmacTerminal-windows-x64`（`PmacTerminal-1.0.2-windows-x64.zip`）
+   - `PmacTerminal-macos-arm64`（`PmacTerminal-1.0.2-macos-arm64.zip`，内含 `.app`）
 
 macOS 产物未使用开发者证书签名（仅 ad-hoc）。首次运行若被 Gatekeeper 拦截，
 可右键“打开”，或执行 `xattr -dr com.apple.quarantine <app 路径>`。
-macOS 版只关闭命令框的 IME 组合输入，不通过 Carbon TIS 切换或恢复系统输入源，
-避免多标签焦点事件互相竞争并影响其他程序。Windows 仍保留原有英文布局自动切换。
+macOS 版已移除“自动英文”，命令框完整使用系统输入法，不屏蔽 IME 组合或提交，
+不切换或恢复系统输入源。输入 PMAC 命令时请手动选择英文输入法。
+macOS 默认 IP 为 `192.168.250.200`；Windows 默认 IP 为 `192.168.0.200`。
+输入法组合期间不会触发命令发送、命令补全或历史切换。Windows 保留英文布局自动切换。
 macOS 的 `libpmac.dylib` 与 `libpmac_terminal_core.dylib` 均位于
-`PmacTerminalApp.app/Contents/Frameworks`，构建末尾会执行 `codesign --verify`。
+`PmacTerminalApp.app/Contents/Frameworks`，翻译位于 `Contents/Resources/translations`。
+所有资源部署完成后才签名并执行 `codesign --verify`；修改包内翻译后需重新签名。
 
 ## 单文件分发
 
@@ -112,4 +116,14 @@ powershell -NoProfile -File tools/package-singlefile.ps1
 dist\PmacTerminalApp.exe --terminal-smoke
 ```
 
-自检不连接控制器，覆盖终端/Watch 面板、语言下拉、符号补全与标签生命周期。
+自检不连接控制器，覆盖终端/Watch 面板、语言下拉、符号补全、IME 组合/提交与标签生命周期。
+macOS 可执行 `dist/PmacTerminalApp.app/Contents/MacOS/PmacTerminalApp --terminal-smoke`。
+CI 在 offscreen/software 后端运行该自检；真实输入法候选仍需在 macOS 桌面验证。
+macOS 焦点路由检查：`dist/PmacTerminalApp.app/Contents/MacOS/PmacTerminalApp --terminal-focus-smoke`。
+该检查通过顶层窗口派发鼠标/按键，循环验证用户名、密码、IP 与终端、Watch 单元格之间的输入切换。
+Windows 可用 `dist\PmacTerminalApp.exe --widget-shell --terminal-focus-smoke` 检查相同宿主路径；
+macOS CI 还会使用 Cocoa 后端执行此项检查。
+
+退出取消自检：`dist\PmacTerminalApp.exe --backend-shutdown-smoke`（macOS 使用上述 `.app` 内的可执行文件）。
+测试仅连接本机模拟 SSH 服务的临时端口，覆盖握手等待取消、复位重连停止与后台线程生命周期；
+Windows/macOS CI 均执行此检查。退出时取消活动请求并停止后续操作，SDK 的最终收尾仍由其自身完成。

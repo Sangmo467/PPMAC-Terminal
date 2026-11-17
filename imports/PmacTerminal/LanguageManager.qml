@@ -3,7 +3,7 @@ import QtQuick 6.5
 import PmacTerminal.Backend
 
 // 文案由 C++ Translator 单例统一加载（与后台消息同一份数据）：
-// 优先 exe 旁 translations/ 目录，回退内置 qrc 资源。
+// 优先部署的 translations/ 目录（macOS 在 Contents/Resources 下），回退内置 qrc。
 // 新增语言：translations/ 下加 <code>.json 并在 languages.json 中登记即可，
 // 下拉框会自动出现新语言（本文件与界面代码无需改动）。
 QtObject {

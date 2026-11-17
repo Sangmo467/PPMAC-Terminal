@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  APP_VERSION: "1.0.1"
+  APP_VERSION: "1.0.2"
   QT_VERSION: "6.8.3"
   QT_VERSION_MACOS: "6.9.2"
   PMAC_VERSION: "2.0.7"
@@ -63,6 +63,26 @@ jobs:
 
       - name: Build
         run: cmake --build build --parallel
+
+      - name: Backend shutdown smoke
+        timeout-minutes: 2
+        env:
+          QT_FORCE_STDERR_LOGGING: "1"
+        run: |
+          $test = Start-Process -FilePath "$PWD/dist/PmacTerminalApp.exe" -ArgumentList '--backend-shutdown-smoke' -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput build/shutdown.out.log -RedirectStandardError build/shutdown.err.log
+          Get-Content -Encoding UTF8 build/shutdown.out.log
+          Get-Content -Encoding UTF8 build/shutdown.err.log
+          exit $test.ExitCode
+
+      - name: Widget shell focus smoke
+        timeout-minutes: 2
+        env:
+          QT_FORCE_STDERR_LOGGING: "1"
+        run: |
+          $test = Start-Process -FilePath "$PWD/dist/PmacTerminalApp.exe" -ArgumentList '--widget-shell','--terminal-focus-smoke' -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput build/focus.out.log -RedirectStandardError build/focus.err.log
+          Get-Content -Encoding UTF8 build/focus.out.log
+          Get-Content -Encoding UTF8 build/focus.err.log
+          exit $test.ExitCode
 
       - name: Package
         run: Compress-Archive -Path dist/* -DestinationPath "PmacTerminal-$env:APP_VERSION-windows-x64.zip"
@@ -134,19 +154,40 @@ jobs:
             esac
           done < macos-build.log
 
-      # 部署脚本已 ad-hoc 签名；复制到 dist 后再验证 bundle 和业务库。
-      - name: Verify and ad-hoc sign
+      # 直接验证部署产物，避免重新签名掩盖构建过程中对 bundle 的后续修改。
+      - name: Verify deployed bundle
         run: |
           app="dist/PmacTerminalApp.app"
           test -f "$app/Contents/Frameworks/libpmac.dylib"
           test -f "$app/Contents/Frameworks/libpmac_terminal_core.dylib"
           test -f "$app/Contents/Frameworks/QtCore.framework/Versions/A/QtCore"
           test -f "$app/Contents/Frameworks/QtQuick.framework/Versions/A/QtQuick"
-          codesign --force --deep --sign - "$app"
+          test -f "$app/Contents/Resources/translations/languages.json"
           codesign --verify --deep --strict --verbose=2 "$app"
           otool -L "$app/Contents/MacOS/PmacTerminalApp"
           otool -D "$app/Contents/Frameworks/libpmac.dylib"
           otool -D "$app/Contents/Frameworks/libpmac_terminal_core.dylib"
+
+      - name: Terminal integration smoke
+        timeout-minutes: 2
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+        run: dist/PmacTerminalApp.app/Contents/MacOS/PmacTerminalApp --terminal-smoke
+
+      - name: Backend shutdown smoke
+        timeout-minutes: 2
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+        run: dist/PmacTerminalApp.app/Contents/MacOS/PmacTerminalApp --backend-shutdown-smoke
+
+      - name: Cocoa focus routing smoke
+        timeout-minutes: 2
+        env:
+          QT_QPA_PLATFORM: cocoa
+          QT_QUICK_BACKEND: software
+        run: dist/PmacTerminalApp.app/Contents/MacOS/PmacTerminalApp --terminal-focus-smoke
 
       - name: Package
         run: ditto -c -k --sequesterRsrc --keepParent dist/PmacTerminalApp.app "PmacTerminal-$APP_VERSION-macos-arm64.zip"

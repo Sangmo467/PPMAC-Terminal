@@ -43,6 +43,7 @@ Rectangle {
         Text { text: LanguageManager.username; color: "#9aa3b2"; font.pixelSize: Constants.fontBody }
         AppTextField {
             id: userField
+            objectName: "connectionUsername"
             Layout.preferredWidth: Math.round(140 * Constants.uiScale)
             text: "root"
             placeholderText: LanguageManager.phUsername
@@ -51,6 +52,7 @@ Rectangle {
         Text { text: LanguageManager.password; color: "#9aa3b2"; font.pixelSize: Constants.fontBody }
         AppTextField {
             id: passField
+            objectName: "connectionPassword"
             Layout.preferredWidth: Math.round(140 * Constants.uiScale)
             text: "deltatau"
             placeholderText: LanguageManager.phPassword
@@ -60,8 +62,9 @@ Rectangle {
         Text { text: LanguageManager.ipAddress; color: "#9aa3b2"; font.pixelSize: Constants.fontBody }
         AppTextField {
             id: ipField
+            objectName: "connectionIpAddress"
             Layout.preferredWidth: Math.round(200 * Constants.uiScale)
-            text: "192.168.0.200"
+            text: Qt.platform.os === "osx" ? "192.168.250.200" : "192.168.0.200"
             placeholderText: "192.168.0.200"
             inputMethodHints: Qt.ImhFormattedNumbersOnly
         }

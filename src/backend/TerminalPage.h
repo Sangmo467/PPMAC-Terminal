@@ -17,6 +17,7 @@ public:
     void setBackend(Backend *backend);
     Q_INVOKABLE void newSession();
     Q_INVOKABLE int smokeTest();
+    Q_INVOKABLE int focusSmokeTest();
 signals:
     void backendChanged();
 private:

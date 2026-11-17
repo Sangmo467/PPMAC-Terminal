@@ -1,5 +1,6 @@
 #include "TerminalPage.h"
 #include <QQuickWindow>
+#include <QQuickRenderControl>
 #include <QScopeGuard>
 #include "TerminalWidgets.inc"
 #include "WatchPanel.h"
@@ -29,6 +30,7 @@ struct TerminalPage::Impl {
     QLabel *hintLabel = nullptr;
     QMetaObject::Connection frameConnection;
     QMetaObject::Connection activeConnection;
+    QMetaObject::Connection focusConnection;
     QPointer<QWidget> lastFocus;
     int number = 0;
 };
@@ -38,14 +40,16 @@ TerminalPage::TerminalPage(QQuickItem *parent) : QQuickItem(parent), d(std::make
     connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow *w) {
         QObject::disconnect(d->frameConnection);
         QObject::disconnect(d->activeConnection);
+        d->lastFocus.clear();
         if (d->host) d->host->hide();
         if (w) {
             d->frameConnection = connect(w, &QQuickWindow::afterAnimating, this, &TerminalPage::syncHost);
             // 原生子窗口不会随主窗口重新激活恢复焦点；切回本窗口时补回。
-            d->activeConnection = connect(w, &QQuickWindow::activeChanged, this, [this, w] {
+            // QQuickWidget 的焦点恢复由 QWidget 统一处理，不从其离屏窗口抢焦点。
+            if (!QQuickRenderControl::renderWindowFor(w))
+                d->activeConnection = connect(w, &QQuickWindow::activeChanged, this, [this, w] {
                 if (!d->host) return;
                 if (!w->isActive()) {
-                    if (auto *focused = d->host->focusWidget()) d->lastFocus = focused;
                     if (d->tabs) for (int i = 0; i < d->tabs->count(); ++i)
                         static_cast<Terminal *>(d->tabs->widget(i))->hideCompletion();
                     return;
@@ -63,11 +67,27 @@ TerminalPage::TerminalPage(QQuickItem *parent) : QQuickItem(parent), d(std::make
         syncHost();
     });
     connect(this, &QQuickItem::visibleChanged, this, &TerminalPage::syncHost);
+    // QWidget::focusWidget() 只是历史记录，QML 获得焦点后仍可能返回旧命令框。
+    // 按真实焦点通知记录归属；应用失活产生的 nullptr 不覆盖恢复目标。
+    d->focusConnection = connect(qGuiApp, &QGuiApplication::focusObjectChanged, this,
+        [this](QObject *object) {
+            if (!d->host) return;
+            if (auto *widget = qobject_cast<QWidget *>(object)) {
+                if (widget == d->host.get() || d->host->isAncestorOf(widget))
+                    d->lastFocus = widget;
+                else if (d->host->parentWidget() && widget->window() == d->host->window())
+                    d->lastFocus.clear();
+            } else if (auto *item = qobject_cast<QQuickItem *>(object)) {
+                if (item->window() == window()) d->lastFocus.clear();
+            }
+        });
 }
 
 TerminalPage::~TerminalPage()
 {
     QObject::disconnect(d->frameConnection);
+    QObject::disconnect(d->activeConnection);
+    QObject::disconnect(d->focusConnection);
     // Destroy sessions (and join their workers) before unloading the Rust DLL.
     d->host.reset();
     d->api.reset();
@@ -91,15 +111,19 @@ void TerminalPage::newSession()
 
 void TerminalPage::syncHost()
 {
-    if (!window() || !isVisible() || !window()->isVisible() || width() <= 0 || height() <= 0) {
-        if (d->host) {
-            if (auto *focused = d->host->focusWidget()) d->lastFocus = focused;
-            d->host->hide();
-        }
+    QPoint renderOffset;
+    auto *renderWindow = window() ? QQuickRenderControl::renderWindowFor(window(), &renderOffset) : nullptr;
+    auto *widgetParent = renderWindow ? QWidget::find(renderWindow->winId()) : nullptr;
+    // QQuickWidget 的离屏 QQuickWindow 没有原生可见性，按其 QWidget 宿主判断。
+    const bool windowVisible = widgetParent ? widgetParent->isVisible() : window() && window()->isVisible();
+    if (!windowVisible || !isVisible() || width() <= 0 || height() <= 0) {
+        if (d->host) d->host->hide();
         return;
     }
+    if (renderWindow && !widgetParent) return;
     if (!d->host) {
-        d->host = std::make_unique<QWidget>(nullptr, Qt::SubWindow | Qt::FramelessWindowHint);
+        d->host = std::make_unique<QWidget>(widgetParent,
+            widgetParent ? Qt::Widget : Qt::SubWindow | Qt::FramelessWindowHint);
         d->host->setObjectName("embeddedTerminal");
         QPalette palette;
         palette.setColor(QPalette::Window, QColor("#16181d"));
@@ -182,15 +206,19 @@ void TerminalPage::syncHost()
             error->setWordWrap(true);
             layout->addWidget(error);
         }
-        d->host->winId();
+        if (!widgetParent) d->host->winId();
     }
-    if (d->host->windowHandle()->parent() != window())
+    if (widgetParent) {
+        if (d->host->parentWidget() != widgetParent) d->host->setParent(widgetParent);
+    } else if (d->host->windowHandle()->parent() != window()) {
         d->host->windowHandle()->setParent(window());
-    const QPoint topLeft = mapToScene(QPointF(0, 0)).toPoint();
+    }
+    const QPoint topLeft = mapToScene(QPointF(0, 0)).toPoint() + renderOffset;
     const QRect geometry(topLeft, QSize(qRound(width()), qRound(height())));
     if (d->host->geometry() != geometry) d->host->setGeometry(geometry);
     if (!d->host->isVisible()) {
         d->host->show();
+        if (widgetParent) d->host->raise();
         if (d->lastFocus && d->lastFocus->isVisible())
             d->lastFocus->setFocus(Qt::OtherFocusReason);
     }
@@ -239,6 +267,7 @@ int TerminalPage::smokeTest()
         }
     }
     auto command = static_cast<CommandEdit *>(input);
+#ifdef Q_OS_WIN
     // A connection/busy transition calls setReadOnly through the base pointer.
     // Auto English must still reject IME queries, preedit and commit events.
     command->setAutoEnglish(true);
@@ -270,6 +299,10 @@ int TerminalPage::smokeTest()
     command->hideCompletion();
     command->clear();
     qInfo() << "Input method: editable transitions, preedit/commit suppression, opt-out and ASCII passed";
+#else
+    const auto *english = page->findChild<QCheckBox *>("autoEnglish");
+    if (!english || english->isChecked() || !english->isHidden()) return 50;
+#endif
 #ifdef Q_OS_WIN
     // Exercise actual Windows layouts and native focus in the embedded terminal.
     {
@@ -338,6 +371,66 @@ int TerminalPage::smokeTest()
         }
     }
 #endif
+    // Native IME input must survive editable transitions and accept both Latin
+    // commits (including dead keys) and Chinese, without triggering submission.
+    {
+#ifdef Q_OS_WIN
+        command->setAutoEnglish(false);
+#else
+        // Even a stale caller enabling the removed feature must not block IME.
+        command->setAutoEnglish(true);
+#endif
+        command->clear();
+        for (bool readOnly : {true, false, true, false}) {
+            input->setReadOnly(readOnly);
+            QInputMethodQueryEvent query(Qt::ImEnabled);
+            QApplication::sendEvent(command, &query);
+            if (query.value(Qt::ImEnabled).toBool() == readOnly
+                || command->testAttribute(Qt::WA_InputMethodEnabled) == readOnly) return 51;
+        }
+        const auto savedSubmit = command->submit;
+        const auto savedHistory = command->history;
+        const auto savedComplete = command->complete;
+        const auto restoreInput = qScopeGuard([&] {
+            command->submit = savedSubmit;
+            command->history = savedHistory;
+            command->historyIndex = -1;
+            command->complete = savedComplete;
+            command->clear();
+            command->setAutoEnglish(true);
+        });
+        int submissions = 0, completions = 0;
+        command->submit = [&] { ++submissions; };
+        command->complete = [&](const QString &) { ++completions; return QStringList{"Motor[]"}; };
+        command->history = {"Sys.ServoTime"};
+        command->historyIndex = -1;
+        command->model.setStringList({"Motor[]"});
+        command->completer.complete(command->cursorRect());
+        auto beginComposition = [&] {
+            QInputMethodEvent preedit(QStringLiteral("zhongwen"), {});
+            QApplication::sendEvent(command, &preedit);
+        };
+        beginComposition();
+        if (command->document()->firstBlock().layout()->preeditAreaText().isEmpty()
+            || command->completer.popup()->isVisible()) return 52;
+        for (int key : {Qt::Key_Return, Qt::Key_Enter, Qt::Key_Tab, Qt::Key_Up, Qt::Key_Down}) {
+            beginComposition();
+            QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
+            QApplication::sendEvent(command, &event);
+            if (submissions || completions || command->historyIndex != -1) return 53;
+        }
+        command->clear();
+        beginComposition();
+        QInputMethodEvent commit;
+        commit.setCommitString(QStringLiteral("中文é"));
+        QApplication::sendEvent(command, &commit);
+        if (command->toPlainText() != QStringLiteral("中文é") || submissions) return 54;
+        // The first Enter after composition has ended submits normally.
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(command, &enter);
+        if (submissions != 1) return 55;
+        qInfo() << "Native IME: editable transitions, preedit, commit and composition keys passed";
+    }
     command->setPlainText(QString::fromUtf8("前缀🙂=Mot"));
     command->moveCursor(QTextCursor::End);
     command->acceptCompletion("Motor[]");
@@ -462,6 +555,23 @@ int TerminalPage::smokeTest()
     QApplication::processEvents();
     syncHost();
     if (!d->host->isVisible()) return 12;
+    const int watchResult = d->watch->smokeTest();
+    if (watchResult) return 60 + watchResult;
+    // Simulate native focus notifications: leaving the terminal for a QML
+    // input must clear its restore target, even though focusWidget() is stale.
+    auto *remainingInput = d->tabs->currentWidget()->findChild<CommandEdit *>("commandInput");
+    if (!remainingInput) return 56;
+    remainingInput->setFocus();
+    emit qGuiApp->focusObjectChanged(remainingInput);
+    if (d->lastFocus != remainingInput) return 57;
+    QQuickItem qmlInput(window()->contentItem());
+    emit qGuiApp->focusObjectChanged(&qmlInput);
+    if (d->lastFocus) return 58;
+    setVisible(false);
+    if (d->lastFocus) return 59;
+    setVisible(true);
+    syncHost();
+    qInfo() << "Focus ownership: QML input is not replaced by cached terminal focus";
     return 0;
 }
 void TerminalPage::retranslate()
@@ -484,4 +594,96 @@ void TerminalPage::setBackend(Backend *backend)
     if (d->watch) d->watch->setBackend(backend);
     retranslate();
     emit backendChanged();
+}
+int TerminalPage::focusSmokeTest()
+{
+    syncHost();
+    if (!d->host || !d->host->parentWidget() || !d->tabs || !d->watch) {
+        qWarning() << "Focus shell unavailable:" << d->host.get()
+                   << "parent" << (d->host ? d->host->parentWidget() : nullptr)
+                   << "scene" << window() << "visible" << (window() && window()->isVisible())
+                   << "size" << size() << "itemVisible" << isVisible();
+        return 1;
+    }
+    auto *shell = d->host->window();
+    auto *nativeWindow = shell->windowHandle();
+    QQuickItem *sceneRoot = this;
+    while (sceneRoot->parentItem() && sceneRoot->parentItem() != window()->contentItem())
+        sceneRoot = sceneRoot->parentItem();
+    auto *username = sceneRoot->findChild<QQuickItem *>("connectionUsername");
+    auto *ip = sceneRoot->findChild<QQuickItem *>("connectionIpAddress");
+    auto *password = sceneRoot->findChild<QQuickItem *>("connectionPassword");
+    auto *command = d->tabs->currentWidget()->findChild<CommandEdit *>("commandInput");
+    auto *table = d->watch->findChild<QTableWidget *>("watchTable");
+    if (!nativeWindow || !username || !password || !ip || !command || !table) return 2;
+#ifdef Q_OS_MACOS
+    if (ip->property("text").toString() != "192.168.250.200") return 3;
+#else
+    if (ip->property("text").toString() != "192.168.0.200") return 3;
+#endif
+    const QList<QQuickItem *> fields{username, password, ip};
+    QVariantList savedText;
+    for (const auto *field : fields) savedText << field->property("text");
+    const auto restore = qScopeGuard([&] {
+        for (int i = 0; i < fields.size(); ++i) fields[i]->setProperty("text", savedText[i]);
+        command->clear();
+    });
+    shell->activateWindow();
+    QApplication::processEvents();
+    const auto click = [&](const QPoint &position, bool doubleClick = false) {
+        const auto global = shell->mapToGlobal(position);
+        QMouseEvent press(doubleClick ? QEvent::MouseButtonDblClick : QEvent::MouseButtonPress,
+                          position, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(nativeWindow, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, position, global,
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(nativeWindow, &release);
+        QApplication::processEvents();
+    };
+    const auto type = [&](int key, const QString &text) {
+        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier, text);
+        QApplication::sendEvent(nativeWindow, &press);
+        QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier, text);
+        QApplication::sendEvent(nativeWindow, &release);
+        QApplication::processEvents();
+    };
+    QPoint renderOffset;
+    QQuickRenderControl::renderWindowFor(window(), &renderOffset);
+    for (int cycle = 0; cycle < 5; ++cycle) for (auto *field : fields) {
+        const auto fieldPosition = field->mapToScene(
+            QPointF(field->width() / 2, field->height() / 2)).toPoint() + renderOffset;
+        field->setProperty("text", QString());
+        command->clear();
+        click(fieldPosition);
+        type(Qt::Key_1, "1");
+        if (field->property("text").toString() != "1" || !command->toPlainText().isEmpty()) return 4;
+        click(command->viewport()->mapTo(shell, QPoint(15, command->viewport()->height() / 2)));
+        type(Qt::Key_X, "x");
+        command->hideCompletion();
+        if (command->toPlainText() != "x" || field->property("text").toString() != "1") return 5;
+        auto *item = table->item(table->rowCount() - 1, 0);
+        if (!item) return 6;
+        table->scrollToItem(item);
+        const auto position = table->viewport()->mapTo(shell, table->visualItemRect(item).center());
+        click(position);
+        const auto editorForWatch = [&]() -> CommandEdit * {
+            for (auto *editor : table->findChildren<CommandEdit *>("watchCellEditor"))
+                if (editor->isVisible()) return editor;
+            return nullptr;
+        };
+        if (!editorForWatch()) click(position, true);
+        auto *editor = editorForWatch();
+        if (!editor) return 7;
+        type(Qt::Key_P, "p");
+        editor->hideCompletion();
+        if (editor->toPlainText() != "p" || command->toPlainText() != "x"
+            || field->property("text").toString() != "1") return 8;
+        type(Qt::Key_Return, "\r");
+        if (item->text() != "p") return 9;
+        click(fieldPosition);
+        type(Qt::Key_2, "2");
+        if (field->property("text").toString() != "12" || command->toPlainText() != "x") return 10;
+    }
+    qInfo() << "Focus routing: 15 cycles across username/password/IP, terminal and Watch editor passed";
+    return 0;
 }

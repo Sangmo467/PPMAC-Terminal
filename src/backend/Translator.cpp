@@ -14,11 +14,15 @@ namespace {
 QHash<QString, QJsonObject> g_dicts;
 QMutex g_mutex;
 
-// 读 JSON 对象：优先 exe 旁 translations/ 目录，回退内置资源 :/translations/
+// 优先读取部署的 translations/（macOS 为 Contents/Resources），回退内置资源。
 QJsonObject loadJson(const QString &name)
 {
-    QFile file(QCoreApplication::applicationDirPath()
-               + QStringLiteral("/translations/") + name);
+#ifdef Q_OS_MACOS
+    const auto directory = QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/translations/");
+#else
+    const auto directory = QCoreApplication::applicationDirPath() + QStringLiteral("/translations/");
+#endif
+    QFile file(directory + name);
     if (!file.exists())
         file.setFileName(QStringLiteral(":/translations/") + name);
     if (!file.open(QIODevice::ReadOnly))

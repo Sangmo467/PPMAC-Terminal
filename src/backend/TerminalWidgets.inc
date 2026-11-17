@@ -40,11 +40,7 @@ class Terminal : public QWidget {
         printButton->setText(t("terminal.print"));
         timing->setText(t("terminal.timing"));
         english->setText(t("terminal.autoEnglish"));
-#ifdef Q_OS_MACOS
-        english->setToolTip(t("terminal.autoEnglishTipMac"));
-#else
         english->setToolTip(t("terminal.autoEnglishTip"));
-#endif
         input->setPlaceholderText(t("terminal.placeholder"));
         updateImeState();
         updateState();
@@ -186,8 +182,8 @@ public:
         input = new CommandEdit; input->setFont(output->font()); input->completer.popup()->setFont(output->font());
         input->stateChanged = [this] { updateImeState(); };
         connect(english, &QCheckBox::toggled, input, &CommandEdit::setAutoEnglish);
-#if !defined(Q_OS_WIN) && !defined(Q_OS_MACOS)
-        // Linux 暂无输入源自动切换，关闭英文模式锁定以免阻断中文输入。
+#ifndef Q_OS_WIN
+        // macOS/Linux 使用系统输入法，不提供自动英文或 IME 屏蔽。
         english->setChecked(false);
         english->setVisible(false);
 #endif

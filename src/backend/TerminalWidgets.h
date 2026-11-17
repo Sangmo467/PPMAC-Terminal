@@ -247,9 +247,18 @@ public:
 };
 class CommandEdit:public QPlainTextEdit {
     Q_OBJECT
+#ifdef Q_OS_WIN
     bool autoEnglish = true;
+#else
+    bool autoEnglish = false;
+#endif
 
+    bool isComposing() const {
+        const auto *layout = textCursor().block().layout();
+        return layout && !layout->preeditAreaText().isEmpty();
+    }
     void syncInputMethodPolicy() {
+#ifdef Q_OS_WIN
         // setReadOnly(false) 会重新设置此属性，必须在状态变化后重新应用策略。
         setAttribute(Qt::WA_InputMethodEnabled, !autoEnglish && isEnabled() && !isReadOnly());
         if (!hasInputFocus()) return;
@@ -260,6 +269,7 @@ class CommandEdit:public QPlainTextEdit {
             QGuiApplication::inputMethod()->reset();
         }
         QGuiApplication::inputMethod()->update(Qt::ImEnabled | Qt::ImHints);
+#endif
     }
 #ifdef Q_OS_WIN
     HKL previousLayout = nullptr;
@@ -305,7 +315,13 @@ public:
 #endif
     }
     void setAutoEnglish(bool enabled) {
+#ifdef Q_OS_WIN
         autoEnglish = enabled;
+#else
+        // 非 Windows 平台完全使用系统输入法，调用方也不能重新开启 IME 屏蔽。
+        Q_UNUSED(enabled);
+        autoEnglish = false;
+#endif
         syncInputMethodPolicy();
 #ifdef Q_OS_WIN
         if (!enabled) restoreInputMode();
@@ -419,6 +435,8 @@ protected:
             return;
         }
         QPlainTextEdit::inputMethodEvent(event);
+        // 输入法候选与命令补全不能同时接管 Enter/Tab/方向键。
+        if (isComposing()) hideCompletion();
     }
     void focusInEvent(QFocusEvent *event) override {
         QPlainTextEdit::focusInEvent(event);
@@ -436,6 +454,7 @@ protected:
     bool eventFilter(QObject* object,QEvent* event)override {
         if(object==completer.popup()&&event->type()==QEvent::Hide){QToolTip::hideText();}
         if((object==completer.popup()||object==this)&&event->type()==QEvent::KeyPress){
+            if (isComposing()) return false;
             auto key=static_cast<QKeyEvent*>(event);
             if((key->key()==Qt::Key_Return||key->key()==Qt::Key_Enter)&&!(key->modifiers()&Qt::ShiftModifier)){handleEnter();return true;}
             if(key->key()==Qt::Key_Tab&&completer.popup()->isVisible()){const auto index=completer.popup()->currentIndex();if(index.isValid())acceptCompletion(index.data().toString());return true;}
@@ -443,6 +462,10 @@ protected:
         return QPlainTextEdit::eventFilter(object,event);
     }
     void keyPressEvent(QKeyEvent* e)override {
+        if (isComposing()) {
+            QPlainTextEdit::keyPressEvent(e);
+            return;
+        }
 #ifdef Q_OS_WIN
         // 焦点可能被原生宿主窗口吞掉，按键时核验真实布局。
         preferEnglish();

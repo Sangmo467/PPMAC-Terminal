@@ -4,9 +4,11 @@
 
 #include <QtWidgets>
 #include <algorithm>
+#include <cmath>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QTimer>
 #include <QUuid>
 
@@ -25,10 +27,11 @@ QString extractValueText(const QString &line)
 }
 
 // 从 "对象=值"、裸数值或 $/0x 十六进制中取数值与位模式。
-bool parseResponseValue(const QString &line, double *number, quint64 *bits)
+bool parseResponseValue(const QString &line, double *number, quint64 *bits, bool *validBits)
 {
     const QString value = extractValueText(line);
     if (value.isEmpty()) return false;
+    *validBits = true;
     bool ok = false;
     if (value.startsWith(QLatin1Char('$'))) {
         *bits = value.mid(1).toULongLong(&ok, 16);
@@ -42,11 +45,23 @@ bool parseResponseValue(const QString &line, double *number, quint64 *bits)
         *number = double(*bits);
         return true;
     }
-    const double real = value.toDouble(&ok);
-    if (ok) { *number = real; *bits = quint64(real); return true; }
+    // 十进制整数直接解析，避免先转 double 丢掉 2^53 以上的低位。
     const qlonglong integer = value.toLongLong(&ok);
     if (ok) { *number = double(integer); *bits = quint64(integer); return true; }
-    return false;
+    const qulonglong unsignedInteger = value.toULongLong(&ok);
+    if (ok) { *number = double(unsignedInteger); *bits = unsignedInteger; return true; }
+    const double real = value.toDouble(&ok);
+    if (!ok) return false;
+    *number = real;
+    static const QRegularExpression decimalInteger(QStringLiteral("^[+-]?[0-9]+$"));
+    // 非有限值、越界整数/浮点数只保留其数值显示，不能强转成位模式。
+    *validBits = !decimalInteger.match(value).hasMatch() && std::isfinite(real)
+        && real >= -0x1p63 && real < 0x1p64;
+    if (*validBits) {
+        // 负浮点数先在有符号范围内截断，再做定义明确的模 2^64 转换。
+        *bits = real < 0 ? quint64(qint64(real)) : quint64(real);
+    }
+    return true;
 }
 
 // 支持鼠标拖动调整行序，Delete 删除选中行。
@@ -759,8 +774,12 @@ void WatchPanel::applyFormat(int row)
     QString display = first.trimmed();
     double number = 0;
     quint64 bits = 0;
-    if (parseResponseValue(first, &number, &bits)) {
-        switch (d->formats.value(row, Impl::Format::Auto)) {
+    bool validBits = false;
+    if (parseResponseValue(first, &number, &bits, &validBits)) {
+        auto format = d->formats.value(row, Impl::Format::Auto);
+        // 无合法位模式时回退原数值，浮点显示仍可独立使用。
+        if (!validBits && format != Impl::Format::Float) format = Impl::Format::Auto;
+        switch (format) {
         case Impl::Format::Float:
             display = QString::number(number, 'g', 10);
             break;
@@ -926,4 +945,41 @@ QString WatchPanel::rowResponseForTest(int row) const
 {
     const auto *item = d->table->item(row, 1);
     return item ? item->text() : QString();
+}
+
+int WatchPanel::smokeTest()
+{
+    // Exercise actual display formatting, including integers beyond double's
+    // exact range and values that cannot safely be converted to 64-bit bits.
+    const int row = placeholderRow();
+    if (row < 0) return 1;
+    const auto savedRaw = d->raw[row];
+    const auto savedFormat = d->formats[row];
+    const auto restore = qScopeGuard([&] {
+        d->raw[row] = savedRaw;
+        d->formats[row] = savedFormat;
+        applyFormat(row);
+    });
+    const struct { const char *raw; const char *expected; } cases[] = {
+        {"P=9007199254740993", "0x20000000000001"},
+        {"P=18446744073709551615", "0xFFFFFFFFFFFFFFFF"},
+        {"P=-1", "0xFFFFFFFFFFFFFFFF"},
+        {"P=-1.75", "0xFFFFFFFFFFFFFFFF"},
+        {"P=-9223372036854775808", "0x8000000000000000"},
+        {"P=$FF", "0xFF"}, {"P=0xFF", "0xFF"},
+        {"P=nan", "nan"}, {"P=inf", "inf"},
+        {"P=1e100", "1e100"}, {"P=-1e100", "-1e100"},
+        {"P=18446744073709551616", "18446744073709551616"},
+        {"P=-9223372036854775809", "-9223372036854775809"}
+    };
+    d->formats[row] = Impl::Format::Hex;
+    for (const auto &test : cases) {
+        setResponse(row, QString::fromLatin1(test.raw), false);
+        if (rowResponseForTest(row) != QString::fromLatin1(test.expected)) {
+            qWarning() << "Watch format regression:" << test.raw << rowResponseForTest(row);
+            return 2;
+        }
+    }
+    qInfo() << "Watch formatting: exact integers, negative values and invalid bit conversions passed";
+    return 0;
 }

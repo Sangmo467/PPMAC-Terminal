@@ -43,6 +43,7 @@ target_link_libraries(PmacTerminalBackend PUBLIC
     Qt${QT_VERSION_MAJOR}::Quick
     Qt6::Widgets
     Qt6::PrintSupport
+    Qt6::Network
     Pmac::pmac
 )
 
@@ -54,4 +55,4 @@ endif()
 if(WIN32)
     target_link_libraries(PmacTerminalBackend PUBLIC user32 imm32)
 endif()
-# macOS 仅关闭命令框的 IME 组合输入，不切换系统输入源。
+# macOS 使用系统输入法，不切换输入源或屏蔽 IME。

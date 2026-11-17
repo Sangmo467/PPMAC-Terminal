@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.21.1)
 
-project(PmacTerminalApp VERSION 1.0.1 LANGUAGES CXX)
+project(PmacTerminalApp VERSION 1.0.2 LANGUAGES CXX)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
 find_package(QT NAMES Qt6 COMPONENTS Gui Qml Quick)
-find_package(Qt6 REQUIRED COMPONENTS Core Qml Quick Widgets PrintSupport)
+find_package(Qt6 REQUIRED COMPONENTS Core Qml Quick Widgets PrintSupport Network QuickWidgets)
 
 if (Qt6_VERSION VERSION_LESS 6.2.0)
 message(FATAL_ERROR "You need Qt 6.2.0 or newer to build the application.")
@@ -289,6 +289,7 @@ if (APPLE)
                 "-DAPP_BUNDLE=$<TARGET_BUNDLE_DIR:${CMAKE_PROJECT_NAME}>"
                 "-DAPP_EXECUTABLE=$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
                 "-DQML_DIR=${CMAKE_CURRENT_SOURCE_DIR}/content"
+                "-DTRANSLATIONS_DIR=${CMAKE_CURRENT_SOURCE_DIR}/translations"
                 "-DPMAC_LIBRARY=${PMAC_SDK_DIR}/${_pmac_native_lib}"
                 "-DTERMINAL_CORE_LIBRARY=${PMACT_CORE_LIB}"
                 "-DMACDEPLOYQT=${MACDEPLOYQT_EXE}"
@@ -320,13 +321,15 @@ else ()
     )
 endif ()
 
-# 翻译文件复制到 exe 旁（须晚于上面 windeployqt 清理步骤中对 translations 目录的删除）。
-# 运行时优先读该目录，内置 qrc 仅作回退——不重新编译即可修改/新增语言。
-add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/translations
-        $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/translations
-)
+# macOS 翻译由部署脚本复制到 Resources，必须在最终签名前完成。
+# 其他平台放在程序旁，晚于 windeployqt 的 translations 清理步骤。
+if (NOT APPLE)
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/translations
+            $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/translations
+    )
+endif ()
 
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
@@ -335,6 +338,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
     Qt${QT_VERSION_MAJOR}::Qml
     Qt6::Widgets
     Qt6::PrintSupport
+    Qt6::QuickWidgets
     PmacTerminalBackendplugin
 )
 

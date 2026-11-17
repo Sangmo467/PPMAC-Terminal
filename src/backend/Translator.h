@@ -7,7 +7,7 @@
 #include <qqmlregistration.h>
 
 // 界面与后台消息翻译（QML 与 C++ 共用）。
-// 优先读取 exe 旁 translations/<code>.json（不重新编译即可修改/新增语言），
+// 优先读取部署的 translations/<code>.json（macOS 在 Contents/Resources 下），
 // 文件不存在时回退到内置资源 :/translations/<code>.json；
 // 键缺失时回退 en，再退化为键名本身。
 namespace Tr {

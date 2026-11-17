@@ -1,4 +1,4 @@
-foreach(_name APP_BUNDLE APP_EXECUTABLE QML_DIR PMAC_LIBRARY TERMINAL_CORE_LIBRARY MACDEPLOYQT)
+foreach(_name APP_BUNDLE APP_EXECUTABLE QML_DIR TRANSLATIONS_DIR PMAC_LIBRARY TERMINAL_CORE_LIBRARY MACDEPLOYQT)
     if(NOT DEFINED ${_name} OR "${${_name}}" STREQUAL "")
         message(FATAL_ERROR "Missing required argument: ${_name}")
     endif()
@@ -20,6 +20,9 @@ set(_bundled_core "${_frameworks}/libpmac_terminal_core.dylib")
 file(MAKE_DIRECTORY "${_frameworks}")
 file(REMOVE "${_macos}/libpmac.dylib" "${_macos}/libpmac_terminal_core.dylib")
 file(COPY "${PMAC_LIBRARY}" DESTINATION "${_frameworks}")
+# 清理旧版本放在 MacOS 下的资源；所有 bundle 内容必须在签名前就位。
+file(REMOVE_RECURSE "${_macos}/translations")
+file(COPY "${TRANSLATIONS_DIR}" DESTINATION "${_contents}/Resources")
 
 run_command(install_name_tool -id "@rpath/libpmac.dylib" "${_bundled_pmac}")
 execute_process(

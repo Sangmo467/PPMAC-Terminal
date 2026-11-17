@@ -25,6 +25,7 @@ class Backend : public QObject
 public:
     explicit Backend(QObject *parent = nullptr);
     ~Backend() override;
+    static int shutdownSmokeTest();
 
     // Terminal operations are queued on the connection worker.
     void sendTerminalCommand(const QString &requestId, const QString &command);
