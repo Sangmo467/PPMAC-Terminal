@@ -352,6 +352,7 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
     watchTable->deleteSelected = [this] { removeSelectedRows(); };
     d->table = watchTable;
     d->table->setObjectName("watchTable");
+    d->table->setColumnHidden(2, true);
     d->table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     d->table->setFont(TerminalColors::terminalFont());
     QFont headerFont;
@@ -1215,6 +1216,7 @@ QString WatchPanel::rowResponseForTest(int row) const
 
 int WatchPanel::smokeTest()
 {
+    if (!d->table->isColumnHidden(2)) return 23;
     const int savedPeriodIndex = d->periodCombo->currentIndex();
     d->periodCombo->setCurrentIndex(0);
     if (d->periodMs != 50 || d->periodCombo->currentData().toInt() != 50) return 3;
