@@ -11,6 +11,8 @@ Rectangle {
     property alias username: userField.text
     property alias password: passField.text
     property alias ipAddress: ipField.text
+    property bool hasRecentIps: false
+    property alias recentIpSelector: recentIpSelector
     property string connectionState: "disconnected"   // disconnected | connecting | connected | failed
     property string firmwareVersion: ""
     property alias connectButton: connectButton
@@ -101,6 +103,40 @@ Rectangle {
             text: Qt.platform.os === "osx" ? "192.168.250.200" : "192.168.0.200"
             placeholderText: "192.168.0.200"
             inputMethodHints: Qt.ImhFormattedNumbersOnly
+            rightPadding: recentIpSelector.width + leftPadding
+
+            ToolButton {
+                id: recentIpSelector
+                objectName: "recentIpSelector"
+                anchors.right: parent.right
+                anchors.rightMargin: 2
+                anchors.top: parent.top
+                anchors.topMargin: 2
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 2
+                width: Math.round(32 * Constants.uiScale)
+                enabled: bar.hasRecentIps
+                focusPolicy: Qt.StrongFocus
+                text: "▾"
+                Accessible.name: LanguageManager.recentIps
+                ToolTip.text: LanguageManager.recentIps
+                ToolTip.visible: enabled && hovered
+
+                contentItem: Text {
+                    text: recentIpSelector.text
+                    color: recentIpSelector.enabled ? "#d7dae0" : "#5f6875"
+                    font.pixelSize: Constants.fontBody
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                background: Rectangle {
+                    radius: 4
+                    color: recentIpSelector.down ? "#343a45"
+                         : recentIpSelector.hovered ? "#262b33" : "transparent"
+                    border.color: recentIpSelector.activeFocus ? "#3fa7f5" : "transparent"
+                }
+            }
         }
 
         AppButton {

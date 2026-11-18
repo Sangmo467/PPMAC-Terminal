@@ -63,6 +63,7 @@ QtObject {
     readonly property string username: t("username")
     readonly property string password: t("password")
     readonly property string ipAddress: t("ipAddress")
+    readonly property string recentIps: t("recentIps")
     readonly property string phUsername: t("phUsername")
     readonly property string phPassword: t("phPassword")
     readonly property string connect: t("connect")

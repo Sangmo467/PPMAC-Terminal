@@ -3,6 +3,7 @@
   "username": "ユーザー名",
   "password": "パスワード",
   "ipAddress": "IP アドレス",
+  "recentIps": "最近接続した IP アドレス",
   "phUsername": "ユーザー名を入力",
   "phPassword": "パスワードを入力",
   "connect": "接続",

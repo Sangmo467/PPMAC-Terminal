@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  APP_VERSION: "1.0.9"
+  APP_VERSION: "1.0.10"
   QT_VERSION: "6.8.3"
   QT_VERSION_MACOS: "6.9.2"
   PMAC_VERSION: "2.0.10"

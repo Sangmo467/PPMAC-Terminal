@@ -3,6 +3,7 @@
   "username": "用户名",
   "password": "密码",
   "ipAddress": "IP 地址",
+  "recentIps": "最近连接的 IP",
   "phUsername": "请输入用户名",
   "phPassword": "请输入密码",
   "connect": "连接",

@@ -3,6 +3,7 @@
   "username": "使用者名稱",
   "password": "密碼",
   "ipAddress": "IP 位址",
+  "recentIps": "最近連線的 IP",
   "phUsername": "請輸入使用者名稱",
   "phPassword": "請輸入密碼",
   "connect": "連線",

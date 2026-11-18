@@ -28,7 +28,15 @@ Screen01 {
         }
     }
 
-    // 语言切换：使用原生菜单，浮在终端原生窗口之上。
+    // 连接历史和语言切换共用原生菜单，避免被终端原生窗口遮挡。
+    Connections {
+        target: screen.recentIpSelector
+        function onClicked() {
+            const selector = screen.recentIpSelector;
+            NativeMenu.showRecentIps(backendObj.recentIps, selector.mapToGlobal(selector.width, selector.height));
+        }
+    }
+
     Connections {
         target: screen.languageSelector
         function onActivated() {
@@ -38,6 +46,9 @@ Screen01 {
     }
     Connections {
         target: NativeMenu
+        function onRecentIpSelected(ip) {
+            screen.ipAddress = ip;
+        }
         function onLanguageSelected(code) {
             LanguageManager.language = code;
         }

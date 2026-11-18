@@ -3,6 +3,7 @@
   "username": "Nom d'utilisateur",
   "password": "Mot de passe",
   "ipAddress": "Adresse IP",
+  "recentIps": "Adresses IP récentes",
   "phUsername": "Saisir le nom d'utilisateur",
   "phPassword": "Saisir le mot de passe",
   "connect": "Connecter",

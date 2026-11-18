@@ -28,6 +28,7 @@ Rectangle {
     property alias username: connBar.username
     property alias password: connBar.password
     property alias ipAddress: connBar.ipAddress
+    property alias recentIpSelector: connBar.recentIpSelector
     property alias connectButton: connBar.connectButton
     property alias firmwareVersion: connBar.firmwareVersion
     property alias languageSelector: connBar.languageSelector
@@ -48,6 +49,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         connectionState: root.connectionState
+        hasRecentIps: root.backend !== null && root.backend.recentIps.length > 0
     }
 
     TerminalPage {

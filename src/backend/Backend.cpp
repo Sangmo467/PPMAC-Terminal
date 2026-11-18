@@ -8,6 +8,7 @@
 #include <QEventLoop>
 #include <QScopeGuard>
 #include <QSemaphore>
+#include <QSettings>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QMetaObject>
@@ -20,6 +21,15 @@
 #include <stdexcept>
 
 namespace {
+constexpr qsizetype recentIpLimit = 6;
+constexpr auto recentIpsKey = "connection/recentIps";
+
+QSettings connectionSettings()
+{
+    return QSettings(QSettings::IniFormat, QSettings::UserScope,
+                     QStringLiteral("PmacTerminal"), QStringLiteral("PmacTerminal"));
+}
+
 // 与上游一致：除宏从站外，$$$ 开头的命令都按复位处理。
 bool isResetCommand(const QString &command)
 {
@@ -283,7 +293,7 @@ public:
             }
             if (PmacConnection::interrupted()) return;
             emit firmwareReady(firmware);
-            emit connectionEstablished();
+            emit connectionEstablished(ip);
         } catch (const std::exception &e) {
             if (PmacConnection::interrupted()) return;
             emit connectionFailed(Tr::tr(m_language, QStringLiteral("backend.connectionFailed"))
@@ -338,7 +348,7 @@ signals:
                               const QStringList &hardware, const QStringList &hardwareRoots,
                               const QStringList &aliases, bool hardwareKnown,
                               const QString &error);
-    void connectionEstablished();
+    void connectionEstablished(const QString &ip);
     void connectionFailed(const QString &reason);
     void disconnected();
     void firmwareReady(const QString &version);
@@ -356,6 +366,7 @@ private:
 
 Backend::Backend(QObject *parent)
     : QObject(parent)
+    , m_recentIps(connectionSettings().value(recentIpsKey).toStringList().mid(0, recentIpLimit))
     , m_thread(new QThread(this))
     , m_worker(new BackendWorker)
 {
@@ -382,7 +393,8 @@ Backend::Backend(QObject *parent)
     m_worker->moveToThread(m_thread);
     connect(m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
 
-    connect(m_worker, &BackendWorker::connectionEstablished, this, [this]() {
+    connect(m_worker, &BackendWorker::connectionEstablished, this, [this](const QString &ip) {
+        rememberIp(ip);
         setConnectionState(QStringLiteral("connected"));
         setBusy(false);
         refreshTerminalSymbols();
@@ -467,6 +479,27 @@ void Backend::setBusy(bool busy)
         return;
     m_busy = busy;
     emit busyChanged();
+}
+
+void Backend::rememberIp(const QString &ip)
+{
+    const auto address = ip.trimmed();
+    if (address.isEmpty())
+        return;
+
+    auto settings = connectionSettings();
+    auto recentIps = settings.value(recentIpsKey).toStringList();
+    recentIps.removeAll(address);
+    recentIps.prepend(address);
+    if (recentIps.size() > recentIpLimit)
+        recentIps.resize(recentIpLimit);
+    settings.setValue(recentIpsKey, recentIps);
+    settings.sync();
+
+    if (m_recentIps != recentIps) {
+        m_recentIps = recentIps;
+        emit recentIpsChanged();
+    }
 }
 
 void Backend::connectTo(const QString &user, const QString &password, const QString &ip)

@@ -3,6 +3,7 @@
   "username": "उपयोगकर्ता नाम",
   "password": "पासवर्ड",
   "ipAddress": "IP पता",
+  "recentIps": "हाल के IP पते",
   "phUsername": "उपयोगकर्ता नाम दर्ज करें",
   "phPassword": "पासवर्ड दर्ज करें",
   "connect": "कनेक्ट करें",

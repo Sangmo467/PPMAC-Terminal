@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21.1)
 
-project(PmacTerminalApp VERSION 1.0.9 LANGUAGES CXX)
+project(PmacTerminalApp VERSION 1.0.10 LANGUAGES CXX)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)

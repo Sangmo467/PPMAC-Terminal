@@ -18,6 +18,7 @@ class Backend : public QObject
     QML_ELEMENT
     Q_PROPERTY(QString connectionState READ connectionState NOTIFY connectionStateChanged)
     Q_PROPERTY(QString firmwareVersion READ firmwareVersion NOTIFY firmwareVersionChanged)
+    Q_PROPERTY(QStringList recentIps READ recentIps NOTIFY recentIpsChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     // 语言代码（对应 translations/<code>.json），写入后后台消息语言即时切换
     Q_PROPERTY(QString language READ language WRITE setLanguage NOTIFY languageChanged)
@@ -39,6 +40,7 @@ public:
 
     QString connectionState() const { return m_connectionState; }
     QString firmwareVersion() const { return m_firmwareVersion; }
+    QStringList recentIps() const { return m_recentIps; }
     bool busy() const { return m_busy; }
     QString language() const { return m_language; }
 
@@ -52,6 +54,7 @@ signals:
     void terminalSymbolsChanged();
     void connectionStateChanged();
     void firmwareVersionChanged();
+    void recentIpsChanged();
     void busyChanged();
     void languageChanged();
     void operationFailed(const QString &message);
@@ -60,6 +63,7 @@ private:
     void setConnectionState(const QString &state);
     void setFirmwareVersion(const QString &version);
     void setBusy(bool busy);
+    void rememberIp(const QString &ip);
 
     QStringList m_terminalSymbols;
     QStringList m_terminalHardware;
@@ -71,6 +75,7 @@ private:
     bool m_terminalSymbolsLoading = false;
     QString m_connectionState = QStringLiteral("disconnected");
     QString m_firmwareVersion;
+    QStringList m_recentIps;
     QString m_language;
     bool m_busy = false;
 

@@ -3,6 +3,7 @@
   "username": "Username",
   "password": "Password",
   "ipAddress": "IP Address",
+  "recentIps": "Recent IP addresses",
   "phUsername": "Enter username",
   "phPassword": "Enter password",
   "connect": "Connect",
