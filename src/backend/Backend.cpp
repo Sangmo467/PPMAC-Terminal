@@ -9,6 +9,7 @@
 #include <QScopeGuard>
 #include <QSemaphore>
 #include <QSettings>
+#include <QSet>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QMetaObject>
@@ -17,6 +18,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 
@@ -54,6 +56,7 @@ public:
         elapsed.start();
         QString text, stderrText, error;
         const bool reset = isResetCommand(command);
+        if (reset) ++m_symbolRevision;
         try {
             if (!m_client || !m_client->isConnected())
                 throw std::runtime_error("主连接未连接");
@@ -128,123 +131,197 @@ public:
         return false;
     }
 
+    struct SymbolScan {
+        quint64 generation = 0, revision = 0;
+        QStringList files, hardware, roots, aliases, probes;
+        enum { Files, Gates, Aliases, Channels, Complete };
+        int stage = Files, index = 0, channel = 0;
+        bool hardwareKnown = false;
+        std::function<QString(const QString &)> readFile, query;
+    };
+
+    static int symbolSchedulingSmokeTest()
+    {
+        BackendWorker worker;
+        QEventLoop loop;
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+        timeout.start(3000);
+        int reads = 0, queries = 0, readsAtForeground = -1, completions = 0;
+        QStringList hardware, aliases;
+        QString failure;
+        auto scan = std::make_shared<SymbolScan>();
+        scan->probes = {"pp_swtbl0.sym", "1", "2", "3", "4", "5", "6"};
+        scan->readFile = [&](const QString &name) {
+            ++reads;
+            if (reads == 1) QMetaObject::invokeMethod(&worker, [&] {
+                readsAtForeground = reads;
+            }, Qt::QueuedConnection);
+            return name == QLatin1String("pp_swtbl0.sym")
+                ? QStringLiteral("x\x01" "CK3WAX[]\x01" "x\x01" "x\x01" "Gate1[]") : QString();
+        };
+        scan->query = [&](const QString &command) {
+            ++queries;
+            if (command == QLatin1String("Gate1[0].PartNum")
+                || command == QLatin1String("CK3WAX[0].PartNum")) return QStringLiteral("PartNum=123");
+            if (command.endsWith(QLatin1String(".Chan[0].EncCtrl"))) return QStringLiteral("EncCtrl=0");
+            if (command.contains(QLatin1String(".Chan["))) return QStringLiteral("error #20");
+            return QStringLiteral("PartNum=0");
+        };
+        connect(&worker, &BackendWorker::terminalSymbolsReady, &loop,
+            [&](quint64, const QStringList &, const QStringList &hw, const QStringList &,
+                const QStringList &pairs, bool, const QString &error) {
+                ++completions;
+                hardware = hw;
+                aliases = pairs;
+                failure = error;
+                loop.quit();
+            });
+        worker.queueSymbolStep(scan);
+        loop.exec();
+        if (completions != 1 || !failure.isEmpty() || reads != 7 || queries != 73
+            || readsAtForeground != 1 || hardware.size() != 4
+            || !hardware.contains("CK3WAX[0].Chan[0]") || aliases != QStringList{"CK3WAX=Gate1"}) return 24;
+        // 断开/重连/复位递增 revision 后，已排队的扫描不得再发请求或结果。
+        const int before = reads;
+        scan->stage = SymbolScan::Files;
+        scan->index = 0;
+        scan->probes = {"stale"};
+        worker.queueSymbolStep(scan);
+        ++worker.m_symbolRevision;
+        QMetaObject::invokeMethod(&loop, &QEventLoop::quit, Qt::QueuedConnection);
+        loop.exec();
+        if (reads != before || completions != 1) return 25;
+        scan->revision = worker.m_symbolRevision;
+        scan->readFile = [](const QString &) -> QString { throw std::runtime_error("test read failure"); };
+        worker.queueSymbolStep(scan);
+        loop.exec();
+        if (completions != 2 || failure != QLatin1String("test read failure") || !scan->files.isEmpty()) return 26;
+        qInfo() << "Symbol scan: foreground interleaving, hardware/alias/channel discovery and stale-task cancellation passed";
+        return 0;
+    }
+
     void terminalSymbols(quint64 generation)
     {
         if (PmacConnection::interrupted()) return;
-        QStringList files;
-        QStringList hardware, hardwareRoots, aliasPairs;
-        bool hardwareKnown = false;
-        QString error;
-        try {
+        auto scan = std::make_shared<SymbolScan>();
+        scan->generation = generation;
+        scan->revision = ++m_symbolRevision;
+        scan->probes = {"pp_swtbl0.sym", "pp_swtbl1.sym", "pp_swtbl2.sym",
+                        "pp_swtbl3.sym", "pp_global.sym", "pp_prog.sym", "pp_local.sym"};
+        scan->readFile = [this](const QString &name) {
             if (!m_client || !m_client->isConnected())
                 throw std::runtime_error("主连接未连接");
-            const QStringList names = {"pp_swtbl0.sym", "pp_swtbl1.sym", "pp_swtbl2.sym",
-                                       "pp_swtbl3.sym", "pp_global.sym", "pp_prog.sym", "pp_local.sym"};
-            for (const auto &name : names) {
-                const auto data = m_client->shell(
-                    ("cat -- /var/ftp/usrflash/Database/" + name).toStdString(), false);
-                files.append(QString::fromUtf8(reinterpret_cast<const char *>(data.data()), data.size()));
+            const auto data = m_client->shell(
+                ("cat -- /var/ftp/usrflash/Database/" + name).toStdString(), false);
+            return QString::fromUtf8(reinterpret_cast<const char *>(data.data()), data.size());
+        };
+        scan->query = [this](const QString &command) {
+            if (!m_client || !m_client->isConnected())
+                throw std::runtime_error("主连接未连接");
+            return QString::fromUtf8(m_client->getResponse(command.toStdString()));
+        };
+        queueSymbolStep(scan);
+    }
+
+    // 每次最多一次网络请求，然后返回 worker 事件循环，让终端、Watch、断开穿插执行。
+    // 所有 SDK 操作仍由同一个线程持有；revision 阻止重连/复位后继续旧扫描。
+    void queueSymbolStep(const std::shared_ptr<SymbolScan> &scan)
+    {
+        QMetaObject::invokeMethod(this, [this, scan] { symbolStep(scan); }, Qt::QueuedConnection);
+    }
+
+    void symbolStep(const std::shared_ptr<SymbolScan> &scan)
+    {
+        if (PmacConnection::interrupted() || scan->revision != m_symbolRevision) return;
+        QString error;
+        try {
+            if (scan->index == scan->probes.size()) {
+                scan->index = 0;
+                scan->probes.clear();
+                ++scan->stage;
+                if (scan->stage == SymbolScan::Gates) {
+                    const struct { const char *root; int count; } bases[] = {
+                        {"Gate1", 20}, {"Gate2", 16}, {"Gate3", 16}, {"GateIo", 16}};
+                    for (const auto &base : bases)
+                        for (int i = 0; i < base.count; ++i)
+                            scan->probes << QStringLiteral("%1[%2]").arg(QLatin1String(base.root)).arg(i);
+                } else if (scan->stage == SymbolScan::Aliases) {
+                    QSet<QString> seen;
+                    for (const auto &line : scan->files.value(0).split(QLatin1Char('\n'))) {
+                        const auto fields = line.split(QLatin1Char('\x01'));
+                        if (fields.size() < 5) continue;
+                        const auto name = fields[1].trimmed();
+                        const auto target = fields.last().trimmed();
+                        if (!name.endsWith(QLatin1String("[]")) || !target.endsWith(QLatin1String("[]")))
+                            continue;
+                        const auto alias = name.chopped(2), root = target.chopped(2);
+                        if (seen.contains(alias.toLower())) continue;
+                        seen.insert(alias.toLower());
+                        scan->aliases << alias + QLatin1Char('=') + root;
+                        for (const auto &gate : scan->hardware) {
+                            const int bracket = gate.indexOf(QLatin1Char('['));
+                            if (gate.left(bracket).compare(root, Qt::CaseInsensitive) == 0)
+                                scan->probes << alias + gate.mid(bracket);
+                        }
+                    }
+                } else if (scan->stage == SymbolScan::Channels) {
+                    scan->probes = scan->hardware;
+                }
             }
-            // 按控制器实时读数探测硬件：PartNum 为 0/nan/非法均视为不存在。
-            auto present = [&](const QString &instance) {
+            // 空阶段也通过事件循环续接，不递归执行网络操作。
+            if (scan->stage < SymbolScan::Complete && scan->probes.isEmpty()) {
+                queueSymbolStep(scan);
+                return;
+            }
+            if (scan->stage == SymbolScan::Files) {
+                scan->files << scan->readFile(scan->probes[scan->index++]);
+            } else if (scan->stage < SymbolScan::Complete) {
+                const auto instance = scan->probes[scan->index];
+                const bool channelProbe = scan->stage == SymbolScan::Channels;
+                bool ok = false;
+                double value = 0;
                 try {
-                    const auto reply = QString::fromUtf8(
-                        m_client->getResponse((instance + QStringLiteral(".PartNum")).toStdString()).c_str());
-                    const int equals = reply.lastIndexOf(QLatin1Char('='));
-                    bool ok = false;
-                    const double value = reply.mid(equals + 1).trimmed().toDouble(&ok);
-                    if (!ok) return std::make_pair(false, false);  // 命令不可用/无读数
-                    return std::make_pair(true, !std::isnan(value) && value != 0.0);
+                    const auto command = channelProbe
+                        ? QStringLiteral("%1.Chan[%2].EncCtrl").arg(instance).arg(scan->channel)
+                        : instance + QStringLiteral(".PartNum");
+                    const auto reply = scan->query(command);
+                    value = reply.mid(reply.lastIndexOf(QLatin1Char('=')) + 1).trimmed().toDouble(&ok);
                 } catch (const PmacConnection::Interrupted &) {
                     throw;
                 } catch (const std::exception &) {
-                    return std::make_pair(false, false);
+                    // 某个硬件成员不可用不影响后续探测。
                 }
-            };
-            bool anyChecked = false;
-            const struct { const char *root; int count; } bases[] = {
-                {"Gate1", 20}, {"Gate2", 16}, {"Gate3", 16}, {"GateIo", 16}};
-            QStringList gates;
-            for (const auto &base : bases) {
-                bool checkedAny = false;
-                for (int index = 0; index < base.count; ++index) {
-                    const auto name = QStringLiteral("%1[%2]").arg(QLatin1String(base.root)).arg(index);
-                    const auto result = present(name);
-                    if (result.second) gates << name;
-                    checkedAny = checkedAny || result.first;
-                }
-                if (checkedAny) hardwareRoots << QString::fromLatin1(base.root).toLower();
-                anyChecked = anyChecked || checkedAny;
-            }
-            // 别名结构（CK3WAX[]/CK3WMD[] 等）与其等效结构在相同下标上探测。
-            struct AliasDef { QString name; QString target; };
-            QList<AliasDef> aliasDefs;
-            for (const auto &line : files.value(0).split(QLatin1Char('\n'))) {
-                const auto fields = line.split(QLatin1Char('\x01'));
-                if (fields.size() < 5) continue;
-                const auto name = fields[1].trimmed();
-                const auto target = fields.last().trimmed();
-                if (!name.endsWith(QLatin1String("[]")) || !target.endsWith(QLatin1String("[]")))
-                    continue;
-                if (target.compare(QLatin1String("NULL"), Qt::CaseInsensitive) == 0) continue;
-                const AliasDef def{name.left(name.size() - 2), target.left(target.size() - 2)};
-                bool exists = false;
-                for (const auto &known : aliasDefs)
-                    if (known.name.compare(def.name, Qt::CaseInsensitive) == 0) { exists = true; break; }
-                if (!exists) aliasDefs << def;
-            }
-            QStringList aliasInstances;
-            for (const auto &def : aliasDefs) {
-                bool checkedAny = false;
-                for (const auto &instance : gates) {
-                    const int bracket = instance.indexOf(QLatin1Char('['));
-                    if (bracket <= 0
-                        || instance.left(bracket).compare(def.target, Qt::CaseInsensitive) != 0)
-                        continue;
-                    const auto aliasName = def.name + instance.mid(bracket);
-                    const auto result = present(aliasName);
-                    if (result.second) aliasInstances << aliasName;
-                    checkedAny = checkedAny || result.first;
-                }
-                aliasPairs << def.name + QLatin1Char('=') + def.target;
-                if (checkedAny) hardwareRoots << def.name.toLower();
-            }
-            hardwareRoots.removeDuplicates();
-            hardware = gates;
-            hardware << aliasInstances;
-            // 探测每个实际实例的有效 Chan 数量。
-            const auto instances = hardware;
-            for (const auto &instance : instances) {
-                for (int channel = 0; channel < 8; ++channel) {
-                    const auto probe = QStringLiteral("%1.Chan[%2].EncCtrl").arg(instance).arg(channel);
-                    try {
-                        const auto reply = QString::fromUtf8(
-                            m_client->getResponse(probe.toStdString()).c_str());
-                        const int equals = reply.lastIndexOf(QLatin1Char('='));
-                        bool ok = false;
-                        reply.mid(equals + 1).trimmed().toDouble(&ok);
-                        if (!ok) break;
-                        hardware << QStringLiteral("%1.Chan[%2]").arg(instance).arg(channel);
-                    } catch (const PmacConnection::Interrupted &) {
-                        throw;
-                    } catch (const std::exception &) {
-                        break;
+                if (channelProbe) {
+                    if (ok) scan->hardware << QStringLiteral("%1.Chan[%2]").arg(instance).arg(scan->channel);
+                    if (!ok || ++scan->channel == 8) { ++scan->index; scan->channel = 0; }
+                } else {
+                    if (ok) {
+                        scan->roots << instance.left(instance.indexOf(QLatin1Char('['))).toLower();
+                        if (scan->stage == SymbolScan::Gates) scan->hardwareKnown = true;
+                        if (!std::isnan(value) && value != 0.0) scan->hardware << instance;
                     }
+                    ++scan->index;
                 }
-            }
-            hardwareKnown = anyChecked;
-            if (!m_client->isConnected()) {
-                hardware.clear();
-                hardwareRoots.clear();
-                hardwareKnown = false;
             }
         } catch (const std::exception &e) {
-            files.clear();
+            scan->files.clear();
             error = QString::fromUtf8(e.what());
         }
-        if (PmacConnection::interrupted()) return;
-        emit terminalSymbolsReady(generation, files, hardware, hardwareRoots, aliasPairs,
-                                  hardwareKnown, error);
+        if (PmacConnection::interrupted() || scan->revision != m_symbolRevision) return;
+        if (error.isEmpty() && scan->stage < SymbolScan::Complete) {
+            queueSymbolStep(scan);
+            return;
+        }
+        scan->roots.removeDuplicates();
+        if (m_client && !m_client->isConnected()) {
+            scan->hardware.clear();
+            scan->roots.clear();
+            scan->hardwareKnown = false;
+        }
+        emit terminalSymbolsReady(scan->generation, scan->files, scan->hardware, scan->roots,
+                                  scan->aliases, scan->hardwareKnown, error);
     }
 
     // 界面语言（translations/<code>.json 中的语言代码），由 GUI 线程排队设置
@@ -253,6 +330,7 @@ public:
     void connectTo(const QString &user, const QString &password, const QString &ip, uint16_t port = 22)
     {
         if (PmacConnection::interrupted()) return;
+        ++m_symbolRevision;
         m_port = port;
         m_user = user;
         m_password = password;
@@ -316,6 +394,7 @@ public:
                 return;
             }
         }
+        ++m_symbolRevision;
         m_client.reset();
         emit disconnected();
     }
@@ -336,6 +415,7 @@ public:
                 return;
             }
         }
+        ++m_symbolRevision;
         m_client.reset();
         emit disconnected();
         emit backgroundError(Tr::tr(m_language, QStringLiteral("backend.connectionLost")));
@@ -357,6 +437,7 @@ signals:
     void backgroundError(const QString &message);
 
 private:
+    quint64 m_symbolRevision = 0;
     std::shared_ptr<PmacConnection> m_client;
     QString m_user, m_password, m_ip;
     uint16_t m_port = 22;
@@ -552,6 +633,7 @@ int Backend::shutdownSmokeTest()
     if (PmacConnection::extendedTimeoutMs("P1") != 0) return 22;
     if (PmacConnection::extendedTimeoutMs("$$$") != 0) return 23;
     qInfo() << "ECAT reset/rescan: 20 s timeout; other commands retain SDK defaults";
+    if (const int result = BackendWorker::symbolSchedulingSmokeTest()) return result;
     QSemaphore listening, accepted, recovering;
     std::atomic<uint16_t> port{0};
     std::atomic_int connections{0}, emissions{0};

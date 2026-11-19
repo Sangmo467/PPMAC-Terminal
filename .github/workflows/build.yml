@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  APP_VERSION: "1.0.10"
+  APP_VERSION: "1.0.11"
   QT_VERSION: "6.8.3"
   QT_VERSION_MACOS: "6.9.2"
   PMAC_VERSION: "2.0.10"
@@ -72,6 +72,16 @@ jobs:
           $test = Start-Process -FilePath "$PWD/dist/PmacTerminalApp.exe" -ArgumentList '--backend-shutdown-smoke' -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput build/shutdown.out.log -RedirectStandardError build/shutdown.err.log
           Get-Content -Encoding UTF8 build/shutdown.out.log
           Get-Content -Encoding UTF8 build/shutdown.err.log
+          exit $test.ExitCode
+
+      - name: Terminal integration smoke
+        timeout-minutes: 2
+        env:
+          QT_FORCE_STDERR_LOGGING: "1"
+        run: |
+          $test = Start-Process -FilePath "$PWD/dist/PmacTerminalApp.exe" -ArgumentList '--terminal-smoke' -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput build/terminal.out.log -RedirectStandardError build/terminal.err.log
+          Get-Content -Encoding UTF8 build/terminal.out.log
+          Get-Content -Encoding UTF8 build/terminal.err.log
           exit $test.ExitCode
 
       - name: Widget shell focus smoke

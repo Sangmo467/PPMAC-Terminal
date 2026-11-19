@@ -291,6 +291,7 @@ struct WatchPanel::Impl {
     QList<QMetaObject::Connection> connections;
     QHash<QString, int> inflight;   // request id -> row
     QSet<QString> pollIds;
+    QList<int> pendingPollRows;
     QVector<RowKind> kinds;
     QVector<Format> formats;
     QVector<quint64> masks;
@@ -482,6 +483,7 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
     connect(&d->watchdog, &QTimer::timeout, this, [this] {
         if (d->pollIds.isEmpty()) return;
         const auto expired = d->pollIds;
+        d->pendingPollRows.clear();
         d->pollIds.clear();
         for (const auto &id : expired) {
             auto it = d->inflight.find(id);
@@ -516,6 +518,7 @@ void WatchPanel::setBackend(Backend *backend)
     d->connections.clear();
     d->backend = backend;
     d->inflight.clear();
+    d->pendingPollRows.clear();
     d->pollIds.clear();
     d->watchdog.stop();
     d->pollTimer.stop();
@@ -527,7 +530,7 @@ void WatchPanel::setBackend(Backend *backend)
                 if (it == d->inflight.end()) return;
                 const int row = it.value();
                 d->inflight.erase(it);
-                d->pollIds.remove(id);
+                const bool polled = d->pollIds.remove(id);
                 if (d->pollIds.isEmpty()) d->watchdog.stop();
                 else d->watchdog.start(kPollWatchdogMs);
                 const auto failure = queryErrorText(text, stderrText, error);
@@ -535,12 +538,14 @@ void WatchPanel::setBackend(Backend *backend)
                     d->pollingDisabled[row] = true;
                 setResponse(row, failure.isEmpty() ? text : failure, !failure.isEmpty());
                 schedulePolling();
+                if (polled) QTimer::singleShot(0, this, [this] { continuePolling(); });
             });
         d->connections << connect(backend, &Backend::connectionStateChanged, this, [this] {
             if (!d->backend || d->backend->connectionState() != QLatin1String("connected")) {
                 for (auto it = d->inflight.begin(); it != d->inflight.end(); ++it)
                     setResponse(it.value(), t("watch.notConnected"), true);
                 d->inflight.clear();
+                d->pendingPollRows.clear();
                 d->pollIds.clear();
                 d->watchdog.stop();
             } else {
@@ -554,6 +559,7 @@ void WatchPanel::setBackend(Backend *backend)
         d->connections << connect(backend, &QObject::destroyed, this, [this] {
             d->backend = nullptr;
             d->inflight.clear();
+            d->pendingPollRows.clear();
             d->pollIds.clear();
             d->watchdog.stop();
             d->pollTimer.stop();
@@ -813,6 +819,8 @@ void WatchPanel::removeRow(int row)
             it = d->inflight.erase(it);
         } else { if (it.value() > row) --it.value(); ++it; }
     }
+    d->pendingPollRows.removeAll(row);
+    for (auto &pending : d->pendingPollRows) if (pending > row) --pending;
     d->updating = true;
     d->table->removeRow(row);
     d->kinds.removeAt(row);
@@ -842,6 +850,11 @@ void WatchPanel::moveRow(int from, int to)
     if (from < 0 || from >= rows || to < 0 || to >= rows || from == to) return;
     const auto request = d->table->item(from, 0) ? d->table->item(from, 0)->text() : QString();
     if (request.trimmed().isEmpty()) return;
+    for (auto &pending : d->pendingPollRows) {
+        if (pending == from) pending = to;
+        else if (from < to && pending > from && pending <= to) --pending;
+        else if (from > to && pending >= to && pending < from) ++pending;
+    }
     const auto raw = d->raw.value(from);
     const auto kind = d->kinds.value(from);
     const auto format = d->formats.value(from);
@@ -912,43 +925,51 @@ void WatchPanel::applyFormat(int row)
     if (row < 0 || row >= d->table->rowCount()) return;
     auto *item = d->table->item(row, 1);
     if (!item) return;
-    QString first = d->raw.value(row);
-    const int newline = first.indexOf(QLatin1Char('\n'));
-    if (newline >= 0) first = first.left(newline);
-    QString display = extractValueText(first);
-    double number = 0;
-    quint64 bits = 0;
-    bool validBits = false;
-    if (parseResponseValue(first, &number, &bits, &validBits)) {
-        auto format = d->formats.value(row, Impl::Format::Auto);
-        // 无合法位模式时回退原数值，浮点显示仍可独立使用。
-        if (!validBits && format != Impl::Format::Float) format = Impl::Format::Auto;
-        switch (format) {
-        case Impl::Format::Float:
-            display = QString::number(number, 'g', 10);
-            break;
-        case Impl::Format::Hex: {
-            // 不补前导零，只保留有效位。
-            display = QStringLiteral("0x") + QString::number(bits, 16).toUpper();
-            break;
+    const auto formatLine = [&](const QString &line) {
+        QString display = extractValueText(line);
+        double number = 0;
+        quint64 bits = 0;
+        bool validBits = false;
+        if (parseResponseValue(line, &number, &bits, &validBits)) {
+            auto format = d->formats.value(row, Impl::Format::Auto);
+            // 无合法位模式时回退原数值，浮点显示仍可独立使用。
+            if (!validBits && format != Impl::Format::Float) format = Impl::Format::Auto;
+            switch (format) {
+            case Impl::Format::Float:
+                display = QString::number(number, 'g', 10);
+                break;
+            case Impl::Format::Hex: {
+                // 不补前导零，只保留有效位。
+                display = QStringLiteral("0x") + QString::number(bits, 16).toUpper();
+                break;
+            }
+            case Impl::Format::Fixed:
+                display = QString::number(qint64(bits));
+                break;
+            case Impl::Format::Binary: {
+                const quint64 mask = d->masks.value(row, ~quint64(0));
+                int width = 1;
+                for (int bit = 63; bit > 0; --bit)
+                    if (mask & (quint64(1) << bit)) { width = bit + 1; break; }
+                display = QString::number(bits & mask, 2).rightJustified(width, QLatin1Char('0'));
+                break;
+            }
+            case Impl::Format::Auto:
+                // 默认只显示提取出的数值，不显示整条响应。
+                display = extractValueText(line);
+                break;
+            }
         }
-        case Impl::Format::Fixed:
-            display = QString::number(qint64(bits));
-            break;
-        case Impl::Format::Binary: {
-            const quint64 mask = d->masks.value(row, ~quint64(0));
-            int width = 1;
-            for (int bit = 63; bit > 0; --bit)
-                if (mask & (quint64(1) << bit)) { width = bit + 1; break; }
-            display = QString::number(bits & mask, 2).rightJustified(width, QLatin1Char('0'));
-            break;
-        }
-        case Impl::Format::Auto:
-            // 默认只显示提取出的数值，不显示整条响应。
-            display = extractValueText(first);
-            break;
-        }
+        return display;
+    };
+    QStringList values;
+    const auto lines = d->raw.value(row).split(QRegularExpression(QStringLiteral("[\r\n]+")), Qt::SkipEmptyParts);
+    for (const auto &line : lines) {
+        if (!line.trimmed().isEmpty()) values << formatLine(line);
     }
+    const auto display = values.size() > 1
+        ? QStringLiteral("[%1]").arg(values.join(QStringLiteral(", ")))
+        : values.value(0);
     item->setText(display);
     item->setToolTip(d->raw.value(row));
     auto font = item->font();
@@ -1013,10 +1034,14 @@ void WatchPanel::refreshRow(int row)
         return;
     }
     if (d->backend->busy() || (d->terminalBusy && d->terminalBusy())) return;
+    if (d->inflight.values().contains(row)) return;
     const auto request = rowRequest(row).trimmed();
     if (request.isEmpty()) return;
     const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     d->inflight.insert(id, row);
+    d->pendingPollRows.removeAll(row);
+    d->pollIds.insert(id);
+    d->watchdog.start(kPollWatchdogMs);
     d->backend->sendTerminalCommand(id, request);
 }
 
@@ -1026,30 +1051,49 @@ void WatchPanel::schedulePolling()
     const int queries = queryRowCount();
     if (!connected || d->pauseBox->isChecked() || queries == 0) {
         d->pollTimer.stop();
+        d->pendingPollRows.clear();
         return;
     }
     const int interval = qMax(kPollFloorMs, d->periodMs);
-    if (!d->pollTimer.isActive() || d->pollTimer.interval() != interval)
-        d->pollTimer.start(interval);
+    const bool starting = !d->pollTimer.isActive();
+    if (starting || d->pollTimer.interval() != interval) d->pollTimer.start(interval);
+    if (starting) QTimer::singleShot(0, this, [this] { pollTick(); });
 }
 
 void WatchPanel::pollTick()
 {
     if (!d->backend || d->backend->connectionState() != QLatin1String("connected")
+        || d->pauseBox->isChecked() || !d->inflight.isEmpty()) return;
+    if (d->pendingPollRows.isEmpty()) {
+        for (int row = 0; row < d->table->rowCount(); ++row) {
+            if (d->kinds.value(row) == RowKind::Query && !d->pollingDisabled.value(row)
+                && !rowRequest(row).trimmed().isEmpty())
+                d->pendingPollRows << row;
+        }
+    }
+    continuePolling();
+}
+
+void WatchPanel::continuePolling()
+{
+    if (!d->backend || d->backend->connectionState() != QLatin1String("connected")
         || d->backend->busy() || d->pauseBox->isChecked()
         || (d->terminalBusy && d->terminalBusy()) || !d->inflight.isEmpty())
         return;
-    // 同一轮连续提交所有有效行；每条仍是独立 GPASCII 帧，不在行之间等待一个周期。
-    for (int row = 0; row < d->table->rowCount(); ++row) {
-        if (d->kinds.value(row) != RowKind::Query || d->pollingDisabled.value(row)) continue;
+    // 每个面板最多一条在途查询；响应后立即续下一行，不再把整表塞入通信队列。
+    while (!d->pendingPollRows.isEmpty()) {
+        const int row = d->pendingPollRows.takeFirst();
+        if (row < 0 || row >= d->table->rowCount()
+            || d->kinds.value(row) != RowKind::Query || d->pollingDisabled.value(row)) continue;
         const auto request = rowRequest(row).trimmed();
         if (request.isEmpty()) continue;
         const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         d->inflight.insert(id, row);
         d->pollIds.insert(id);
+        d->watchdog.start(kPollWatchdogMs);
         d->backend->sendTerminalCommand(id, request);
+        return;
     }
-    if (!d->pollIds.isEmpty()) d->watchdog.start(kPollWatchdogMs);
 }
 
 int WatchPanel::queryRowCount() const
@@ -1099,6 +1143,7 @@ bool WatchPanel::importFile(const QString &path, QString *error)
     d->pollTimer.stop();
     d->watchdog.stop();
     d->inflight.clear();
+    d->pendingPollRows.clear();
     d->pollIds.clear();
     d->table->setRowCount(0);
     d->kinds.clear();
@@ -1330,6 +1375,34 @@ int WatchPanel::smokeTest()
     if (rowResponseForTest(row) != QStringLiteral("hello world")) return 8;
     setResponse(row, QStringLiteral("Message=left=right"), false);
     if (rowResponseForTest(row) != QStringLiteral("left=right")) return 9;
-    qInfo() << "Watch formatting: numbers, invalid bit conversions and string values passed";
+    // PMAC 范围查询保持一行请求，逐项显示/格式化所有返回值。
+    d->table->item(row, 0)->setText(QStringLiteral("p1..5"));
+    const auto rangeReply = QStringLiteral("P1=1\r\nP2=2\rP3=3\n\nP4=4\r\nP5=5\r\n");
+    setResponse(row, rangeReply, false);
+    if (rowResponseForTest(row) != QStringLiteral("[1, 2, 3, 4, 5]")) return 24;
+    if (d->table->item(row, 1)->toolTip() != rangeReply) return 25;
+    const struct { Impl::Format format; const char *expected; } rangeFormats[] = {
+        {Impl::Format::Float, "[1, 2, 3, 4, 5]"},
+        {Impl::Format::Hex, "[0x1, 0x2, 0x3, 0x4, 0x5]"},
+        {Impl::Format::Fixed, "[1, 2, 3, 4, 5]"},
+        {Impl::Format::Binary, "[001, 010, 011, 100, 101]"}
+    };
+    d->masks[row] = 7;
+    for (const auto &test : rangeFormats) {
+        d->formats[row] = test.format;
+        applyFormat(row);
+        if (rowResponseForTest(row) != QString::fromLatin1(test.expected)) return 26;
+    }
+    d->formats[row] = Impl::Format::Hex;
+    setResponse(row, QStringLiteral("P1=nan\nP2=18446744073709551615\nP3=-1"), false);
+    if (rowResponseForTest(row) != QStringLiteral("[nan, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF]")) return 27;
+    d->formats[row] = Impl::Format::Auto;
+    setResponse(row, QStringLiteral("1\n2\n3\n4\n5"), false);
+    if (rowResponseForTest(row) != QStringLiteral("[1, 2, 3, 4, 5]")) return 28;
+    if (!exportFile(exportPath, &fileError) || !importFile(exportPath, &fileError)
+        || rowRequestForTest(row) != QStringLiteral("p1..5")) return 29;
+    setResponse(row, rangeReply, false);
+    if (rowResponseForTest(row) != QStringLiteral("[1, 2, 3, 4, 5]")) return 30;
+    qInfo() << "Watch formatting: scalar/range replies, all formats and WTB round-trip passed";
     return 0;
 }

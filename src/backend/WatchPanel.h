@@ -58,6 +58,7 @@ private:
     void refreshRow(int row);
     void schedulePolling();
     void pollTick();
+    void continuePolling();
     int queryRowCount() const;
     void importWatch();
     void exportWatch();

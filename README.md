@@ -13,6 +13,18 @@ PMAC 通信使用 `pmac.dll`（PMAC 2.0.10 MSVC x64 SDK）。
 - Watch 面板：周期查询、拖动排序、查询行/按钮行、浮点/十六进制/定点/二进制掩码显示、`.wtb` 导入/导出
 - 8 种界面语言（简体中文、繁體中文、English、हिन्दी、日本語、Español、Deutsch、Français）
 
+## Watch 刷新与通信调度
+
+- 离线添加的查询在连接成功后立即安排首轮刷新，后续按面板周期轮询。
+- 支持控制器原生范围查询，例如 `p1..5`：同一行显示 `[值1, 值2, 值3, 值4, 值5]`，
+  浮点、十六进制、定点和二进制掩码逐项生效；悬停可查看完整原始响应。
+- 自动轮询每个面板最多提交一条在途查询，收到响应立即查询下一行，避免整表请求堆积；
+  网络较慢时实际刷新周期由整轮通信耗时决定，50 ms 设置不代表每行都能每 50 ms 返回。
+- GUI 与通信使用独立 Qt 线程；符号读取和硬件探测每次执行一个网络请求，再让出通信线程事件循环，
+  允许监控、终端命令与断开操作穿插执行。单次正在执行的 SDK 请求仍需等待完成或超时。
+- 同一 SDK Client 只在通信线程中访问，重连、断开和复位使旧探测失效；不绑定 CPU 核心，
+  不使用平台专有线程调度 API，Windows/macOS 共用该实现。
+
 ## 目录说明
 
 | 路径 | 内容 |
@@ -83,8 +95,8 @@ cmake --build build --parallel
 1. 下载 PMAC 2.0.10 对应平台 SDK Release；
 2. 编译 `third_party/pmac-terminal-rs` 终端核心；
 3. 构建并部署应用，上传产物：
-   - `PmacTerminal-windows-x64`（`PmacTerminal-1.0.10-windows-x64.zip`）
-   - `PmacTerminal-macos-arm64`（`PmacTerminal-1.0.10-macos-arm64.zip`，内含 `.app`）
+   - `PmacTerminal-windows-x64`（`PmacTerminal-1.0.11-windows-x64.zip`）
+   - `PmacTerminal-macos-arm64`（`PmacTerminal-1.0.11-macos-arm64.zip`，内含 `.app`）
 
 macOS 产物未使用开发者证书签名（仅 ad-hoc）。首次运行若被 Gatekeeper 拦截，
 可右键“打开”，或执行 `xattr -dr com.apple.quarantine <app 路径>`。
@@ -125,5 +137,5 @@ Windows 可用 `dist\PmacTerminalApp.exe --terminal-focus-smoke` 检查正式启
 macOS CI 还会使用 Cocoa 后端执行此项检查。
 
 退出取消自检：`dist\PmacTerminalApp.exe --backend-shutdown-smoke`（macOS 使用上述 `.app` 内的可执行文件）。
-测试仅连接本机模拟 SSH 服务的临时端口，覆盖握手等待取消、复位重连停止与后台线程生命周期；
+测试包含离线的后台探测调度/失效检查，并仅连接本机模拟 SSH 服务的临时端口，覆盖握手等待取消、复位重连停止与后台线程生命周期；
 Windows/macOS CI 均执行此检查。退出时取消活动请求并停止后续操作，SDK 的最终收尾仍由其自身完成。
