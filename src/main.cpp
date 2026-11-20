@@ -123,10 +123,17 @@ int main(int argc, char *argv[])
 {
     set_qt_environment();
 
-    // QQuickWidget 支持 Qt 的平台默认后端：Windows 使用 Direct3D，macOS 使用 Metal。
-    // 不强制 OpenGL，避免普通 QWidget 的重绘依赖 Windows OpenGL 驱动的合成路径。
-    // 调试时仍可通过 QSG_RHI_BACKEND=opengl/d3d11 对比渲染后端。
+    // Windows 的轻量 QML 外壳默认使用光栅绘制，避免 GPU 合成失效使整个 QWidget 窗口白屏。
+    // 保留显式后端配置，方便按显卡/驱动排查；macOS 继续使用平台默认 Metal。
+#ifdef Q_OS_WIN
+    if (qEnvironmentVariableIsEmpty("QT_QUICK_BACKEND")
+        && qEnvironmentVariableIsEmpty("QSG_RHI_BACKEND")
+        && qEnvironmentVariableIsEmpty("QMLSCENE_DEVICE"))
+        QQuickWindow::setSceneGraphBackend(QStringLiteral("software"));
+#endif
     QApplication app(argc, argv);
+    QCoreApplication::setApplicationName(QStringLiteral("PmacTerminal"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(PMACT_APP_VERSION));
     app.setWindowIcon(QIcon(u":/icons/PmacTerminal.png"_qs));
 
     if (app.arguments().contains("--backend-shutdown-smoke")) {

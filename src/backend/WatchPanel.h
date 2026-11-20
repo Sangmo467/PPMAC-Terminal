@@ -56,6 +56,10 @@ private:
     QString rowRequest(int row) const;
     void sendRow(int row);
     void refreshRow(int row);
+    int configurationSmokeTest();
+    void initializePersistence(const QString &directory = {});
+    void scheduleSave();
+    void saveConfiguration();
     void schedulePolling();
     void scheduleNextPoll();
     void pollTick();
@@ -64,5 +68,5 @@ private:
     void importWatch();
     void exportWatch();
     bool importFile(const QString &path, QString *error);
-    bool exportFile(const QString &path, QString *error) const;
+    bool exportFile(const QString &path, QString *error, bool localSettings = false) const;
 };

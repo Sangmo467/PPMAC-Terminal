@@ -10,6 +10,8 @@
 #include <QJsonDocument>
 #include <QPointer>
 #include <QSaveFile>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -138,16 +140,25 @@ WatchFileEntry readWatchEntry(QXmlStreamReader &xml)
     return entry;
 }
 
-void readWatchSettings(QXmlStreamReader &xml, int *updateRate)
+struct WatchFileSettings {
+    int updateRate = 0;
+    int paused = -1, addAsButton = -1, requestColumnWidth = 0;
+};
+
+void readWatchSettings(QXmlStreamReader &xml, WatchFileSettings *settings)
 {
     while (xml.readNextStartElement()) {
-        if (xml.name() == QLatin1String("UpdateRate")) *updateRate = xml.readElementText().trimmed().toInt();
+        const auto name = xml.name();
+        if (name == QLatin1String("UpdateRate")) settings->updateRate = xml.readElementText().trimmed().toInt();
+        else if (name == QLatin1String("Paused")) settings->paused = xml.readElementText() == QLatin1String("true");
+        else if (name == QLatin1String("AddAsButton")) settings->addAsButton = xml.readElementText() == QLatin1String("true");
+        else if (name == QLatin1String("RequestColumnWidth")) settings->requestColumnWidth = xml.readElementText().toInt();
         else xml.skipCurrentElement();
     }
 }
 
 bool readWatchData(QXmlStreamReader &xml, QList<WatchFileEntry> *entries,
-                   int *updateRate, QString *error)
+                   WatchFileSettings *settings, QString *error)
 {
     bool rootFound = false;
     while (!xml.atEnd()) {
@@ -162,7 +173,7 @@ bool readWatchData(QXmlStreamReader &xml, QList<WatchFileEntry> *entries,
                 if (error) *error = QStringLiteral("Watch entry count exceeds 100");
                 return false;
             }
-        } else if (xml.name() == QLatin1String("Settings")) readWatchSettings(xml, updateRate);
+        } else if (xml.name() == QLatin1String("Settings")) readWatchSettings(xml, settings);
         else if (xml.name() != QLatin1String("WatchEntryItems")) xml.skipCurrentElement();
     }
     if (xml.hasError()) {
@@ -305,7 +316,9 @@ struct WatchPanel::Impl {
     QCheckBox *addAsButton = nullptr;
     QTableWidget *table = nullptr;
     int placeholderIndex = -1;
-    QTimer pollTimer, watchdog;
+    QTimer pollTimer, watchdog, autosaveTimer;
+    QString settingsPath, autosavePath;
+    bool restoring = false, autosaveDirty = false;
     QElapsedTimer pollRoundElapsed;
     QList<QMetaObject::Connection> connections;
     QHash<QString, int> inflight;   // request id -> row
@@ -398,10 +411,14 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
         tablePalette.setColor(group, QPalette::Text, QColor("#000000"));
         tablePalette.setColor(group, QPalette::Button, QColor("#eef1f5"));
         tablePalette.setColor(group, QPalette::ButtonText, QColor("#000000"));
-        tablePalette.setColor(group, QPalette::Highlight, QColor("#0078d7"));
-        tablePalette.setColor(group, QPalette::HighlightedText, QColor("#ffffff"));
+        tablePalette.setColor(group, QPalette::Highlight, QColor("#cce8ff"));
+        tablePalette.setColor(group, QPalette::HighlightedText, QColor("#102a43"));
     }
     d->table->setPalette(tablePalette);
+    // 仅调色板仍会被 Windows 原生失焦样式改成灰色，显式覆盖所有选中状态。
+    d->table->setStyleSheet(
+        "QTableWidget#watchTable {selection-background-color:#cce8ff;selection-color:#102a43;}"
+        "QTableWidget#watchTable::item:selected {background-color:#cce8ff;color:#102a43;}");
     auto *delegate = new WatchEditDelegate(d->table);
     delegate->complete = [this](const QString &prefix, QHash<QString, QString> *help) {
         return suggestFor(prefix, help);
@@ -414,8 +431,12 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
         if (d->updating) return;
         d->periodMs = d->periodCombo->currentData().toInt();
         schedulePolling();
+        scheduleSave();
     });
-    connect(d->pauseBox, &QCheckBox::toggled, this, [this] { schedulePolling(); });
+    connect(d->pauseBox, &QCheckBox::toggled, this, [this] { schedulePolling(); scheduleSave(); });
+    connect(d->addAsButton, &QCheckBox::toggled, this, [this] { scheduleSave(); });
+    connect(d->table->horizontalHeader(), &QHeaderView::sectionResized, this,
+            [this](int column, int, int) { if (column == 0) scheduleSave(); });
     connect(d->importButton, &QPushButton::clicked, this, &WatchPanel::importWatch);
     connect(d->exportButton, &QPushButton::clicked, this, &WatchPanel::exportWatch);
     connect(d->table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem *item) {
@@ -427,6 +448,7 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
         if (text.isEmpty()) {
             setResponse(row, QString(), false);
             schedulePolling();
+            scheduleSave();
             return;
         }
         const bool newEntry = row == d->table->rowCount() - 1;
@@ -451,6 +473,7 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
             refreshRow(row);
         }
         ensurePlaceholder();
+        scheduleSave();
     });
     connect(d->table, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
         const auto index = d->table->indexAt(position);
@@ -469,6 +492,7 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
                     if (value == Impl::Format::Binary) { chooseFormat(row); return; }
                     d->formats[row] = value;
                     applyFormat(row);
+                    scheduleSave();
                 });
             };
             addFormat("watch.fmtAuto", Impl::Format::Auto);
@@ -519,11 +543,67 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
     ensurePlaceholder();
     retranslate();
     setBackend(backend);
+    d->autosaveTimer.setSingleShot(true);
+    d->autosaveTimer.setInterval(200);
+    connect(&d->autosaveTimer, &QTimer::timeout, this, &WatchPanel::saveConfiguration);
+    initializePersistence();
 }
 
 WatchPanel::~WatchPanel()
 {
+    saveConfiguration();
     if (d->handle) d->api.destroy(d->handle);
+}
+
+void WatchPanel::initializePersistence(const QString &directory)
+{
+    // 所有离线自检隔离用户配置；持久化回归测试只使用显式传入的临时目录。
+    if (directory.isEmpty()) {
+        for (const auto &argument : QCoreApplication::arguments())
+            if (argument.endsWith(QLatin1String("-smoke"))) return;
+    }
+    const auto root = directory.isEmpty()
+        ? QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) : directory;
+    if (root.isEmpty() || !QDir().mkpath(root)) {
+        qWarning() << "Cannot create Watch configuration directory:" << root;
+        return;
+    }
+    d->settingsPath = QDir(root).filePath(QStringLiteral("PmacTerminal.ini"));
+    d->autosavePath = QDir(root).filePath(QStringLiteral("watch.wtb"));
+    QSettings settings(d->settingsPath, QSettings::IniFormat);
+    if (!settings.contains(QStringLiteral("Watch/RestoreOnStartup"))) {
+        settings.setValue(QStringLiteral("Watch/RestoreOnStartup"), true);
+        settings.sync();
+    }
+    if (settings.value(QStringLiteral("Watch/RestoreOnStartup"), true).toBool()
+        && QFile::exists(d->autosavePath)) {
+        const auto previous = d->restoring;
+        d->restoring = true;
+        QString error;
+        if (!importFile(d->autosavePath, &error))
+            qWarning() << "Cannot restore Watch configuration:" << d->autosavePath << error;
+        else {
+            // 配置恢复不保留旧数值，也清掉离线构建行时的临时“未连接”提示。
+            for (int row = 0; row < d->table->rowCount(); ++row) setResponse(row, QString(), false);
+        }
+        d->restoring = previous;
+    }
+}
+
+void WatchPanel::scheduleSave()
+{
+    if (d->restoring || d->autosavePath.isEmpty()) return;
+    d->autosaveDirty = true;
+    d->autosaveTimer.start();
+}
+
+void WatchPanel::saveConfiguration()
+{
+    d->autosaveTimer.stop();
+    if (!d->autosaveDirty || d->restoring || d->autosavePath.isEmpty()) return;
+    QString error;
+    if (exportFile(d->autosavePath, &error, true)) d->autosaveDirty = false;
+    else qWarning() << "Cannot save Watch configuration:" << d->autosavePath << error;
 }
 
 QString WatchPanel::t(const char *key) const
@@ -727,6 +807,7 @@ void WatchPanel::addRow(const QString &request, bool asButton)
     else refreshRow(row);
     ensurePlaceholder();
     schedulePolling();
+    scheduleSave();
 }
 
 int WatchPanel::placeholderRow() const
@@ -810,6 +891,7 @@ void WatchPanel::attachButton(int row, const QString &request)
     d->updating = true;
     if (auto *type = d->table->item(row, 2)) type->setText(t("watch.commandButton"));
     d->updating = false;
+    scheduleSave();
 }
 
 void WatchPanel::makeQuery(int row)
@@ -825,6 +907,7 @@ void WatchPanel::makeQuery(int row)
     d->updating = false;
     schedulePolling();
     refreshRow(row);
+    scheduleSave();
 }
 
 void WatchPanel::removeRow(int row)
@@ -854,15 +937,33 @@ void WatchPanel::removeRow(int row)
     if (d->pollIds.isEmpty()) d->watchdog.stop();
     ensurePlaceholder();
     schedulePolling();
+    scheduleSave();
 }
 
 void WatchPanel::removeSelectedRows()
 {
     if (!d->table->selectionModel()) return;
     QList<int> rows;
-    for (const auto &index : d->table->selectionModel()->selectedRows()) rows << index.row();
+    for (const auto &index : d->table->selectionModel()->selectedRows())
+        if (!rowRequest(index.row()).trimmed().isEmpty()) rows << index.row();
+    if (rows.isEmpty()) return;
     std::sort(rows.begin(), rows.end(), std::greater<int>());
+    const int first = rows.last();
     for (const int row : rows) removeRow(row);
+    // 删除后延续选择，连续按 Del 或按键自动重复时无需重新点选。
+    int next = first;
+    while (next < d->table->rowCount() && rowRequest(next).trimmed().isEmpty()) ++next;
+    if (next >= d->table->rowCount()) {
+        next = qMin(first - 1, d->table->rowCount() - 1);
+        while (next >= 0 && rowRequest(next).trimmed().isEmpty()) --next;
+    }
+    if (next < 0) next = placeholderRow();
+    if (next >= 0) {
+        d->table->setCurrentCell(next, 0);
+        d->table->selectRow(next);
+        d->table->scrollToItem(d->table->item(next, 0));
+    }
+    d->table->setFocus(Qt::OtherFocusReason);
 }
 
 void WatchPanel::moveRow(int from, int to)
@@ -917,6 +1018,7 @@ void WatchPanel::moveRow(int from, int to)
     d->table->selectRow(to);
     ensurePlaceholder();
     schedulePolling();
+    scheduleSave();
 }
 
 void WatchPanel::setResponse(int row, const QString &text, bool error)
@@ -1025,6 +1127,7 @@ void WatchPanel::chooseFormat(int row)
     d->masks[row] = mask;
     d->formats[row] = Impl::Format::Binary;
     applyFormat(row);
+    scheduleSave();
 }
 
 QString WatchPanel::rowRequest(int row) const
@@ -1183,8 +1286,10 @@ bool WatchPanel::importFile(const QString &path, QString *error)
     }
     QXmlStreamReader xml(&file);
     QList<WatchFileEntry> entries;
-    int updateRate = 0;
-    if (!readWatchData(xml, &entries, &updateRate, error)) return false;
+    WatchFileSettings settings;
+    if (!readWatchData(xml, &entries, &settings, error)) return false;
+    const auto previousRestoring = d->restoring;
+    d->restoring = true;
 
     d->pollTimer.stop();
     d->watchdog.stop();
@@ -1210,8 +1315,8 @@ bool WatchPanel::importFile(const QString &path, QString *error)
             break;
         }
     }
-    if (updateRate > 0) {
-        const int period = qMax(kPollFloorMs, updateRate);
+    if (settings.updateRate > 0) {
+        const int period = qMax(kPollFloorMs, settings.updateRate);
         int index = d->periodCombo->findData(period);
         if (index < 0) {
             d->periodCombo->addItem(QStringLiteral("%1 s").arg(period / 1000.0), period);
@@ -1219,12 +1324,17 @@ bool WatchPanel::importFile(const QString &path, QString *error)
         }
         d->periodCombo->setCurrentIndex(index);
     }
+    if (settings.paused >= 0) d->pauseBox->setChecked(settings.paused != 0);
+    if (settings.addAsButton >= 0) d->addAsButton->setChecked(settings.addAsButton != 0);
+    if (settings.requestColumnWidth > 0) d->table->setColumnWidth(0, settings.requestColumnWidth);
     retranslate();
     schedulePolling();
+    d->restoring = previousRestoring;
+    scheduleSave();
     return true;
 }
 
-bool WatchPanel::exportFile(const QString &path, QString *error) const
+bool WatchPanel::exportFile(const QString &path, QString *error, bool localSettings) const
 {
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
@@ -1245,11 +1355,11 @@ bool WatchPanel::exportFile(const QString &path, QString *error) const
         const bool command = d->kinds.value(row) == RowKind::Button;
         xml.writeStartElement(QStringLiteral("WatchEntryItem"));
         xml.writeTextElement(QStringLiteral("Request"), request);
-        xml.writeTextElement(QStringLiteral("Response"), d->raw.value(row));
+        xml.writeTextElement(QStringLiteral("Response"), localSettings ? QString() : d->raw.value(row));
         xml.writeTextElement(QStringLiteral("IsCommand"), command ? QStringLiteral("true") : QStringLiteral("false"));
         xml.writeTextElement(QStringLiteral("Comment"), QString());
         xml.writeTextElement(QStringLiteral("IsResponseHavingError"),
-                             d->responseErrors.value(row) ? QStringLiteral("true") : QStringLiteral("false"));
+                             !localSettings && d->responseErrors.value(row) ? QStringLiteral("true") : QStringLiteral("false"));
         xml.writeStartElement(QStringLiteral("FormatSettings"));
         const char *types[] = {"None", "Float", "Hex", "Fixed", "Binary"};
         xml.writeTextElement(QStringLiteral("Type"), QString::fromLatin1(types[qBound(0, int(d->formats.value(row)), 4)]));
@@ -1266,6 +1376,11 @@ bool WatchPanel::exportFile(const QString &path, QString *error) const
     xml.writeEndElement();
     xml.writeStartElement(QStringLiteral("Settings"));
     xml.writeTextElement(QStringLiteral("UpdateRate"), QString::number(d->periodMs));
+    if (localSettings) {
+        xml.writeTextElement(QStringLiteral("Paused"), d->pauseBox->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
+        xml.writeTextElement(QStringLiteral("AddAsButton"), d->addAsButton->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
+        xml.writeTextElement(QStringLiteral("RequestColumnWidth"), QString::number(d->table->columnWidth(0)));
+    }
     xml.writeTextElement(QStringLiteral("EchoMode"), QStringLiteral("7"));
     xml.writeTextElement(QStringLiteral("IsShowingResponseTime"), QStringLiteral("true"));
     xml.writeTextElement(QStringLiteral("IsDisplayingComment"), QStringLiteral("false"));
@@ -1305,9 +1420,159 @@ QString WatchPanel::rowResponseForTest(int row) const
     return item ? item->text() : QString();
 }
 
+int WatchPanel::configurationSmokeTest()
+{
+    // 真实 Del 事件覆盖连续按键、自动重复、多选和空占位行。
+    {
+        WatchPanel panel(d->api, nullptr, [] { return false; });
+        auto *table = panel.d->table;
+        for (int i = 1; i <= 4; ++i) panel.addRow(QStringLiteral("p%1").arg(i));
+        panel.convertRow(3, true);
+        panel.setResponse(0, QStringLiteral("P1=42"), false);
+        table->ensurePolished();
+        for (bool active : {false, true}) {
+            for (bool selected : {false, true}) {
+                for (int column : {0, 1}) {
+                    QImage image(240, 40, QImage::Format_ARGB32_Premultiplied);
+                    // 视图先绘制 Base，再由委托覆盖选中单元格。
+                    image.fill(table->palette().color(QPalette::Base));
+                    QStyleOptionViewItem option;
+                    option.initFrom(table);
+                    option.widget = table;
+                    option.rect = image.rect();
+                    option.font = table->font();
+                    option.state = QStyle::State_Enabled;
+                    if (active) option.state |= QStyle::State_Active;
+                    if (selected) option.state |= QStyle::State_Selected;
+                    QPainter painter(&image);
+                    table->itemDelegateForIndex(table->model()->index(0, column))->paint(&painter, option, table->model()->index(0, column));
+                    painter.end();
+                    const auto background = selected ? QColor("#cce8ff") : QColor("#ffffff");
+                    if (image.pixelColor(2, 2) != background) {
+                        qWarning() << "Watch selection background:" << active << selected << column
+                                   << image.pixelColor(2, 2) << "expected" << background;
+                        return 16;
+                    }
+                    const auto foreground = selected ? QColor("#102a43") : QColor("#000000");
+                    int textPixels = 0;
+                    for (int y = 0; y < image.height(); ++y)
+                        for (int x = 0; x < image.width(); ++x)
+                            if (image.pixelColor(x, y) == foreground) ++textPixels;
+                    if (textPixels < 5) return 17;
+                }
+            }
+        }
+        qInfo() << "Watch selection: light-blue background and dark text in both columns, active and inactive passed";
+        table->selectRow(1);
+        const auto pressDelete = [&](bool repeat = false) {
+            QKeyEvent key(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier, QString(), repeat);
+            QApplication::sendEvent(table, &key);
+        };
+        pressDelete();
+        if (panel.realRowCount() != 3 || table->currentRow() != 1
+            || panel.rowRequest(1) != QLatin1String("p3")) return 1;
+        pressDelete(true);
+        if (panel.realRowCount() != 2 || table->currentRow() != 1
+            || panel.d->kinds.value(1) != RowKind::Button) return 2;
+        pressDelete();
+        if (panel.realRowCount() != 1 || table->currentRow() != 0) return 3;
+        pressDelete();
+        pressDelete(true);
+        if (panel.realRowCount() != 0 || table->rowCount() != 1) return 4;
+        for (int i = 5; i <= 8; ++i) panel.addRow(QStringLiteral("p%1").arg(i));
+        table->clearSelection();
+        for (int row : {0, 2, panel.placeholderRow()})
+            table->selectionModel()->select(table->model()->index(row, 0),
+                                            QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        pressDelete();
+        if (panel.realRowCount() != 2 || panel.rowRequest(0) != QLatin1String("p6")
+            || panel.rowRequest(1) != QLatin1String("p8") || table->currentRow() != 0) return 5;
+    }
+    qInfo() << "Watch Delete: consecutive keys, auto-repeat, multiple selection and placeholder passed";
+
+    QTemporaryDir storage;
+    if (!storage.isValid()) return 6;
+    const auto snapshot = storage.filePath(QStringLiteral("watch.wtb"));
+    const auto ini = storage.filePath(QStringLiteral("PmacTerminal.ini"));
+    {
+        WatchPanel panel(d->api, nullptr, [] { return false; });
+        panel.initializePersistence(storage.path());
+        panel.addRow(QStringLiteral("p1,3,4..6"));
+        panel.addRow(QStringLiteral("p20"), true);
+        panel.moveRow(1, 0);
+        panel.d->formats[1] = Impl::Format::Hex;
+        panel.d->masks[1] = 0xF0F0;
+        panel.d->periodCombo->setCurrentIndex(panel.d->periodCombo->findData(500));
+        panel.d->pauseBox->setChecked(true);
+        panel.d->addAsButton->setChecked(true);
+        panel.d->table->setColumnWidth(0, 260);
+        QEventLoop flush;
+        QTimer::singleShot(300, &flush, &QEventLoop::quit);
+        flush.exec();
+        if (!QFile::exists(snapshot) || panel.d->autosaveDirty) return 7;
+        panel.setResponse(1, QStringLiteral("P1=123"), false);
+        if (panel.d->autosaveDirty || panel.d->autosaveTimer.isActive()) return 8;
+        panel.d->table->item(1, 0)->setText(QStringLiteral("p1,3,4"));
+        if (!panel.d->autosaveDirty) return 9;
+        // 不等待定时器，析构必须把最后一次编辑写完。
+    }
+    {
+        WatchPanel restored(d->api, nullptr, [] { return false; });
+        restored.initializePersistence(storage.path());
+        if (restored.realRowCount() != 2 || restored.rowRequest(0) != QLatin1String("p20")
+            || restored.d->kinds.value(0) != RowKind::Button
+            || restored.rowRequest(1) != QLatin1String("p1,3,4")
+            || restored.d->formats.value(1) != Impl::Format::Hex || restored.d->masks.value(1) != 0xF0F0
+            || restored.d->periodMs != 500 || !restored.d->pauseBox->isChecked()
+            || !restored.d->addAsButton->isChecked() || restored.d->table->columnWidth(0) != 260
+            || !restored.d->raw.value(1).isEmpty() || restored.d->autosaveDirty) return 10;
+    }
+    QSettings settings(ini, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("Watch/RestoreOnStartup"), false);
+    settings.sync();
+    QFile before(snapshot);
+    if (!before.open(QIODevice::ReadOnly)) return 11;
+    const auto previous = before.readAll();
+    before.close();
+    {
+        WatchPanel fresh(d->api, nullptr, [] { return false; });
+        fresh.initializePersistence(storage.path());
+        if (fresh.realRowCount() != 0 || fresh.d->autosaveDirty) return 12;
+    }
+    QFile after(snapshot);
+    if (!after.open(QIODevice::ReadOnly) || after.readAll() != previous) return 13;
+    after.close();
+    {
+        WatchPanel fresh(d->api, nullptr, [] { return false; });
+        fresh.initializePersistence(storage.path());
+        fresh.addRow(QStringLiteral("p99"));
+    }
+    settings.setValue(QStringLiteral("Watch/RestoreOnStartup"), true);
+    settings.sync();
+    {
+        WatchPanel restored(d->api, nullptr, [] { return false; });
+        restored.initializePersistence(storage.path());
+        if (restored.realRowCount() != 1 || restored.rowRequest(0) != QLatin1String("p99")) return 14;
+        restored.d->table->selectRow(0);
+        QKeyEvent key(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+        QApplication::sendEvent(restored.d->table, &key);
+    }
+    {
+        WatchPanel empty(d->api, nullptr, [] { return false; });
+        empty.initializePersistence(storage.path());
+        if (empty.realRowCount() != 0) return 15;
+    }
+    qInfo() << "Watch persistence: auto-save, exit flush, row/settings restore, fresh-start option and empty snapshot passed";
+    return 0;
+}
+
 int WatchPanel::smokeTest()
 {
     if (!d->table->isColumnHidden(2)) return 23;
+    if (const int result = configurationSmokeTest()) {
+        qWarning() << "Watch configuration regression:" << result;
+        return 43 + result;
+    }
     const struct { const char *request; const char *command; } listQueries[] = {
         {"p1,3,4", "p1 p3 p4"},
         {"p1,3,4..6", "p1 p3 p4..6"},
@@ -1542,6 +1807,19 @@ int WatchPanel::smokeTest()
     }
     d->formats[row] = Impl::Format::Auto;
     qInfo() << "Watch list display: comma lists and mixed ranges, formatting and WTB round-trip passed";
+
+    int pulses = 0;
+    QTimer heartbeat;
+    heartbeat.setInterval(0);
+    connect(&heartbeat, &QTimer::timeout, &heartbeat, [&] { ++pulses; });
+    heartbeat.start();
+    for (int value = 0; value < 20000; ++value) {
+        setResponse(row, QStringLiteral("P1=%1").arg(value), false);
+        if (value % 100 == 0) QApplication::processEvents();
+    }
+    heartbeat.stop();
+    if (pulses < 100 || rowResponseForTest(row) != QLatin1String("19999")) return 61;
+    qInfo() << "Watch sustained updates: 20000 responses, GUI heartbeat" << pulses << "passed";
 
     // 隐藏启动的 CI 窗口不会获得绘制事件；此时保留以上数据/格式测试，跳过显示测量。
     const auto *hostWindow = d->table->window()->windowHandle();

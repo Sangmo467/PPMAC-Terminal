@@ -11,7 +11,7 @@ PMAC 通信使用 `pmac.dll`（PMAC 2.0.10 MSVC x64 SDK）。
 - 多标签终端：历史、复制/清空/导出/日志/字体/打印
 - 命令提词器：数组、成员、Gate/Chan、全局变量、程序、局部变量与帮助提示
 - Watch 面板：周期查询、拖动排序、查询行/按钮行、浮点/十六进制/定点/二进制掩码显示、`.wtb` 导入/导出
-- 8 种界面语言（简体中文、繁體中文、English、हिन्दी、日本語、Español、Deutsch、Français）
+- 10 种界面语言（简体中文、繁體中文、English、हिन्दी、日本語、한국어、Tiếng Việt、Español、Deutsch、Français）
 
 ## Watch 刷新与通信调度
 
@@ -24,12 +24,42 @@ PMAC 通信使用 `pmac.dll`（PMAC 2.0.10 MSVC x64 SDK）。
   周期从每轮开始计时，整轮超期后立即开始下一轮，不再等待固定定时器的下一个刻度；
   每条响应到达后立即更新对应单元格，缩短周期会同步缩短轮询等待时间。
   网络较慢时实际刷新周期由整轮通信耗时决定，50 ms 设置不代表每行都能每 50 ms 返回。
-- Qt 界面使用平台默认图形后端：Windows 为 Direct3D，macOS 为 Metal，不再强制 Windows 使用 OpenGL。
-  排查特定显卡/驱动的刷新差异时，可用 `QSG_RHI_BACKEND=opengl` 或 `d3d11` 对比。
+- Windows 的轻量 Qt Quick 外壳默认使用软件光栅绘制，绕过可能导致长时间运行后整窗白屏的 GPU 合成路径；
+  macOS 继续使用平台默认 Metal。显式设置的 `QT_QUICK_BACKEND` / `QSG_RHI_BACKEND` 保持生效，
+  排查特定显卡/驱动时可用 `QSG_RHI_BACKEND=opengl` 或 `d3d11` 对比。
+- 监视条目选中时使用淡蓝底、深色文字，窗口失焦后保持相同颜色，请求列和响应列均生效。
 - GUI 与通信使用独立 Qt 线程；符号读取和硬件探测每次执行一个网络请求，再让出通信线程事件循环，
   允许监控、终端命令与断开操作穿插执行。单次正在执行的 SDK 请求仍需等待完成或超时。
 - 同一 SDK Client 只在通信线程中访问，重连、断开和复位使旧探测失效；不绑定 CPU 核心，
   不使用平台专有线程调度 API，Windows/macOS 共用该实现。
+
+## 版本与监视配置
+
+界面底部显示 `PmacTerminal v<版本号>`。版本只在根目录 `VERSION.txt` 维护，CMake、macOS 应用元数据、
+GitHub Actions 安装包名称与 Release 标题自动读取同一版本。发布时推送 `v<版本号>` 标签；
+工作流会先检查标签与 `VERSION.txt` 一致，再开始编译。
+
+监视面板更改后自动保存配置，关闭时写完最后一次更改。保存条目、查询/按钮类型、顺序、显示格式与掩码、
+刷新周期、暂停状态、“添加为按钮”选项和请求列宽；周期返回的数值不触发配置写入。
+按 Del 删除后自动选中下一条，末尾改选上一条，支持连续按键、按住重复与多选删除。
+
+配置文件使用 Qt 的用户配置目录，默认位置如下（可随系统配置调整）：
+
+| 系统 | 配置目录 |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\PmacTerminal\` |
+| macOS | `~/Library/Preferences/PmacTerminal/` |
+| Linux | `~/.config/PmacTerminal/` |
+
+目录中的 `watch.wtb` 保存监视配置；`PmacTerminal.ini` 控制启动行为：
+
+```ini
+[Watch]
+RestoreOnStartup=true
+```
+
+`true`（默认）恢复上次配置；`false` 每次空白启动，启动本身不会清空已保存文件，随后做出的更改仍会自动保存。
+恢复按钮行不会执行命令，旧响应值不恢复，连接控制器后重新读取。离线自检只使用临时目录，不修改用户配置。
 
 ## 目录说明
 
@@ -101,8 +131,8 @@ cmake --build build --parallel
 1. 下载 PMAC 2.0.10 对应平台 SDK Release；
 2. 编译 `third_party/pmac-terminal-rs` 终端核心；
 3. 构建并部署应用，上传产物：
-   - `PmacTerminal-windows-x64`（`PmacTerminal-1.0.12-windows-x64.zip`）
-   - `PmacTerminal-macos-arm64`（`PmacTerminal-1.0.12-macos-arm64.zip`，内含 `.app`）
+   - `PmacTerminal-windows-x64`（`PmacTerminal-<版本号>-windows-x64.zip`）
+   - `PmacTerminal-macos-arm64`（`PmacTerminal-<版本号>-macos-arm64.zip`，内含 `.app`）
 
 macOS 产物未使用开发者证书签名（仅 ad-hoc）。首次运行若被 Gatekeeper 拦截，
 可右键“打开”，或执行 `xattr -dr com.apple.quarantine <app 路径>`。
@@ -135,6 +165,7 @@ dist\PmacTerminalApp.exe --terminal-smoke
 ```
 
 自检不连接控制器，覆盖终端/Watch 面板、语言下拉、符号补全、IME 组合/提交与标签生命周期。
+另覆盖监视活动/失焦选中色、20000 次数据更新的 GUI 心跳，以及 32 轮窗口内容显隐、缩放与合成图像检查；短时压力测试不能替代实际设备上的长时间运行验证。
 Watch 自检还会以 100 ms、50 ms 周期注入离线响应，记录响应数、实际绘制的数值数量及响应到绘制事件的最大延迟，
 用于区分本机 Qt 绘制与控制器通信造成的刷新瓶颈；隐藏窗口启动时跳过绘制测量。
 macOS 可执行 `dist/PmacTerminalApp.app/Contents/MacOS/PmacTerminalApp --terminal-smoke`。

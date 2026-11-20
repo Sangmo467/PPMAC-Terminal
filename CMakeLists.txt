@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.21.1)
 
-project(PmacTerminalApp VERSION 1.0.12 LANGUAGES CXX)
+# 界面、安装包与发布工作流共用根目录 VERSION.txt。
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt" PMACT_APP_VERSION ENCODING UTF-8)
+string(STRIP "${PMACT_APP_VERSION}" PMACT_APP_VERSION)
+if (NOT PMACT_APP_VERSION MATCHES "^[0-9]+[.][0-9]+[.][0-9]+$")
+    message(FATAL_ERROR "VERSION.txt must contain a major.minor.patch version")
+endif()
+project(PmacTerminalApp VERSION ${PMACT_APP_VERSION} LANGUAGES CXX)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt")
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
@@ -13,6 +20,7 @@ message(FATAL_ERROR "You need Qt 6.2.0 or newer to build the application.")
 endif()
 
 qt_add_executable(${CMAKE_PROJECT_NAME} src/main.cpp)
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PMACT_APP_VERSION="${PROJECT_VERSION}")
 
 # 纯 GUI 程序：Windows 不显示控制台窗口，macOS 生成 .app
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES WIN32_EXECUTABLE TRUE)
@@ -89,6 +97,8 @@ qt_add_resources(${CMAKE_PROJECT_NAME} "translations"
         translations/en.json
         translations/hi.json
         translations/ja.json
+        translations/ko.json
+        translations/vi.json
         translations/es.json
         translations/de.json
         translations/fr.json

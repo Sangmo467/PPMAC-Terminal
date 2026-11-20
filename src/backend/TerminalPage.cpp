@@ -228,12 +228,28 @@ int TerminalPage::smokeTest()
 {
     syncHost();
     if (!d->tabs || d->tabs->count() != 1 || !d->host->isVisible()) return 1;
+    QQuickItem *versionRoot = this;
+    while (versionRoot->parentItem() && versionRoot->parentItem() != window()->contentItem())
+        versionRoot = versionRoot->parentItem();
+    auto *versionLabel = versionRoot->findChild<QQuickItem *>("appVersionLabel");
+    if (QCoreApplication::applicationVersion().isEmpty() || !versionLabel || !versionLabel->isVisible()
+        || versionLabel->property("text").toString()
+            != QStringLiteral("PmacTerminal v%1").arg(QCoreApplication::applicationVersion())) return 128;
+    qInfo() << "Application version label:" << versionLabel->property("text").toString();
     newSession();
     if (d->tabs->count() != 2) return 2;
     auto page = d->tabs->currentWidget();
     auto input = page->findChild<QPlainTextEdit *>("commandInput");
     auto output = page->findChild<QPlainTextEdit *>("terminalOutput");
     if (!input || !output) return 3;
+    const auto graphicsApi = window()->rendererInterface()->graphicsApi();
+    qInfo() << "Qt Quick graphics API:" << graphicsApi;
+#ifdef Q_OS_WIN
+    if (qEnvironmentVariableIsEmpty("QT_QUICK_BACKEND")
+        && qEnvironmentVariableIsEmpty("QSG_RHI_BACKEND")
+        && qEnvironmentVariableIsEmpty("QMLSCENE_DEVICE")
+        && graphicsApi != QSGRendererInterface::Software) return 129;
+#endif
     // Render the completion delegate without focus: native inactive selection
     // must still be blue/white, while the remaining rows stay white/black.
     {
@@ -563,8 +579,33 @@ int TerminalPage::smokeTest()
     if (d->watch->rowCountForTest() != 6) return 33;
     d->watch->retranslate();
     {
-        const int languages = Tr::languages().size();
-        if (languages != 8) return 100 + languages;
+        const auto languages = Tr::languages();
+        if (languages.size() != 10) return 100 + languages.size();
+        if (!d->backend) return 125;
+        const auto savedLanguage = d->backend->language();
+        const auto restoreLanguage = qScopeGuard([&] { d->backend->setLanguage(savedLanguage); });
+        const struct { const char *code, *name, *newTab, *copyAll, *request, *tab; } cases[] = {
+            {"ko", "한국어", "새 터미널", "모두 복사", "요청", "터미널 2"},
+            {"vi", "Tiếng Việt", "Tab lệnh mới", "Sao chép tất cả", "Yêu cầu", "Dòng lệnh 2"}
+        };
+        for (const auto &target : cases) {
+            const auto code = QString::fromUtf8(target.code);
+            bool available = false;
+            for (const auto &language : languages) {
+                const auto entry = language.toMap();
+                if (entry.value(QStringLiteral("code")).toString() == code
+                    && entry.value(QStringLiteral("name")).toString() == QString::fromUtf8(target.name))
+                    available = true;
+            }
+            if (!available || !QFile::exists(QStringLiteral(":/translations/%1.json").arg(code))) return 124;
+            d->backend->setLanguage(code);
+            auto *copyAll = d->tabs->currentWidget()->findChild<QPushButton *>("copyAll");
+            if (d->addButton->text() != QString::fromUtf8(target.newTab) || !copyAll
+                || copyAll->text() != QString::fromUtf8(target.copyAll)
+                || watchTable->horizontalHeaderItem(0)->text() != QString::fromUtf8(target.request)) return 126;
+            if (Tr::tr(code, QStringLiteral("terminal.tab")).arg(2) != QString::fromUtf8(target.tab)) return 127;
+            qInfo() << "Language" << code << "registration, embedded resources, terminal/Watch switching and placeholders passed";
+        }
     }
     setVisible(false);
     if (d->host->isVisible()) return 11;
@@ -590,6 +631,32 @@ int TerminalPage::smokeTest()
     setVisible(true);
     syncHost();
     qInfo() << "Focus ownership: QML input is not replaced by cached terminal focus";
+    // 在实际 QML/原生控件宿主中反复显隐和改变几何，检查合成图像没有整窗变白。
+    {
+        auto *shell = d->host->window();
+        const auto savedSize = shell->size();
+        const auto restoreSize = qScopeGuard([&] { shell->resize(savedSize); syncHost(); });
+        for (int cycle = 0; cycle < 32; ++cycle) {
+            setVisible(false);
+            QApplication::processEvents();
+            shell->resize(savedSize + QSize((cycle % 2) * 12, (cycle % 3) * 8));
+            setVisible(true);
+            syncHost();
+            QApplication::processEvents();
+            const auto image = shell->grab().toImage();
+            if (image.isNull() || !d->host->isVisible()) return 130;
+            int dark = 0, samples = 0;
+            for (int y = 16; y < image.height(); y += 32) {
+                for (int x = 16; x < image.width(); x += 32) {
+                    const auto color = image.pixelColor(x, y);
+                    if (color.red() < 128 && color.green() < 128 && color.blue() < 128) ++dark;
+                    ++samples;
+                }
+            }
+            if (!samples || dark * 5 < samples) return 131;
+        }
+        qInfo() << "Rendering stability: 32 visibility/resize/composition cycles passed";
+    }
     return 0;
 }
 int TerminalPage::deviceCompletionSmokeTest()

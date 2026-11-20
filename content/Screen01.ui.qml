@@ -57,8 +57,27 @@ Rectangle {
         objectName: "terminalPage"
         backend: root.backend
         anchors.top: connBar.bottom
+        anchors.bottom: versionFooter.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+    }
+
+    Rectangle {
+        id: versionFooter
         anchors.bottom: parent.bottom
         anchors.left: parent.left
         anchors.right: parent.right
+        height: Math.round(28 * Constants.uiScale)
+        color: "#1f232b"
+
+        Text {
+            objectName: "appVersionLabel"
+            anchors.right: parent.right
+            anchors.rightMargin: 16
+            anchors.verticalCenter: parent.verticalCenter
+            text: "PmacTerminal v" + Qt.application.version
+            color: "#9aa3b2"
+            font.pixelSize: Constants.fontSmall
+        }
     }
 }
