@@ -5,6 +5,7 @@
 #include <QtWidgets>
 #include <algorithm>
 #include <cmath>
+#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
@@ -20,6 +21,23 @@ namespace {
 constexpr int kPollFloorMs = 50;
 constexpr int kPollWatchdogMs = 10000;
 constexpr int kMaxWatchRows = 100;
+
+// Watch 简写列表补齐变量前缀后，作为同一条 GPASCII 查询发送。
+// 保留原生范围，避免把大范围展开为大量命令；非纯查询文本保持原样。
+QString watchQueryCommand(const QString &request)
+{
+    const auto text = request.trimmed();
+    static const QRegularExpression listQuery(QStringLiteral(
+        "^([pPiImMqQ])([0-9]+(?:\\s*\\.\\.\\s*[0-9]+)?"
+        "(?:\\s*,\\s*[0-9]+(?:\\s*\\.\\.\\s*[0-9]+)?)+)$"));
+    const auto match = listQuery.match(text);
+    if (!match.hasMatch()) return text;
+    const auto prefix = match.captured(1);
+    QStringList queries;
+    for (const auto &entry : match.captured(2).split(QLatin1Char(',')))
+        queries << prefix + QString(entry).simplified().remove(QLatin1Char(' '));
+    return queries.join(QLatin1Char(' '));
+}
 
 // 从 "对象=值" 中只保留数值部分，避免显示整条响应。
 QString extractValueText(const QString &line)
@@ -288,6 +306,7 @@ struct WatchPanel::Impl {
     QTableWidget *table = nullptr;
     int placeholderIndex = -1;
     QTimer pollTimer, watchdog;
+    QElapsedTimer pollRoundElapsed;
     QList<QMetaObject::Connection> connections;
     QHash<QString, int> inflight;   // request id -> row
     QSet<QString> pollIds;
@@ -477,6 +496,7 @@ WatchPanel::WatchPanel(Api &api, Backend *backend, std::function<bool()> termina
         menu.addAction(t("watch.removeRow"), this, [this, row] { removeRow(row); });
         menu.exec(d->table->viewport()->mapToGlobal(position));
     });
+    d->pollTimer.setSingleShot(true);
     d->pollTimer.setTimerType(Qt::PreciseTimer);
     connect(&d->pollTimer, &QTimer::timeout, this, [this] { pollTick(); });
     d->watchdog.setSingleShot(true);
@@ -522,6 +542,7 @@ void WatchPanel::setBackend(Backend *backend)
     d->pollIds.clear();
     d->watchdog.stop();
     d->pollTimer.stop();
+    d->pollRoundElapsed.invalidate();
     if (backend) {
         d->connections << connect(backend, &Backend::terminalResponse, this,
             [this](const QString &id, const QString &text, const QString &stderrText,
@@ -530,7 +551,7 @@ void WatchPanel::setBackend(Backend *backend)
                 if (it == d->inflight.end()) return;
                 const int row = it.value();
                 d->inflight.erase(it);
-                const bool polled = d->pollIds.remove(id);
+                d->pollIds.remove(id);
                 if (d->pollIds.isEmpty()) d->watchdog.stop();
                 else d->watchdog.start(kPollWatchdogMs);
                 const auto failure = queryErrorText(text, stderrText, error);
@@ -538,7 +559,6 @@ void WatchPanel::setBackend(Backend *backend)
                     d->pollingDisabled[row] = true;
                 setResponse(row, failure.isEmpty() ? text : failure, !failure.isEmpty());
                 schedulePolling();
-                if (polled) QTimer::singleShot(0, this, [this] { continuePolling(); });
             });
         d->connections << connect(backend, &Backend::connectionStateChanged, this, [this] {
             if (!d->backend || d->backend->connectionState() != QLatin1String("connected")) {
@@ -573,6 +593,7 @@ void WatchPanel::setBackend(Backend *backend)
 
 void WatchPanel::resetForNewConnection()
 {
+    d->pollRoundElapsed.invalidate();
     for (int row = 0; row < d->table->rowCount(); ++row) {
         if (d->kinds.value(row) == RowKind::Query) d->pollingDisabled[row] = false;
         if (d->responseErrors.value(row)) setResponse(row, QString(), false);
@@ -1035,7 +1056,7 @@ void WatchPanel::refreshRow(int row)
     }
     if (d->backend->busy() || (d->terminalBusy && d->terminalBusy())) return;
     if (d->inflight.values().contains(row)) return;
-    const auto request = rowRequest(row).trimmed();
+    const auto request = watchQueryCommand(rowRequest(row));
     if (request.isEmpty()) return;
     const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     d->inflight.insert(id, row);
@@ -1052,19 +1073,41 @@ void WatchPanel::schedulePolling()
     if (!connected || d->pauseBox->isChecked() || queries == 0) {
         d->pollTimer.stop();
         d->pendingPollRows.clear();
+        d->pollRoundElapsed.invalidate();
         return;
     }
+    // 响应负责续查；在途请求期间不反复唤醒 GUI，也不积压轮询任务。
+    if (!d->inflight.isEmpty()) {
+        d->pollTimer.stop();
+        return;
+    }
+    if (d->backend->busy() || (d->terminalBusy && d->terminalBusy())) {
+        d->pollTimer.start(qMax(kPollFloorMs, d->periodMs));
+        return;
+    }
+    scheduleNextPoll();
+}
+
+void WatchPanel::scheduleNextPoll()
+{
     const int interval = qMax(kPollFloorMs, d->periodMs);
-    const bool starting = !d->pollTimer.isActive();
-    if (starting || d->pollTimer.interval() != interval) d->pollTimer.start(interval);
-    if (starting) QTimer::singleShot(0, this, [this] { pollTick(); });
+    const qint64 elapsed = d->pollRoundElapsed.isValid() ? d->pollRoundElapsed.elapsed() : interval;
+    // 周期从本轮起点计算。已超期时立即开始下一轮，不再等下一个固定刻度。
+    const int delay = d->pendingPollRows.isEmpty()
+        ? int(qMax<qint64>(0, interval - elapsed)) : 0;
+    d->pollTimer.start(delay);
 }
 
 void WatchPanel::pollTick()
 {
     if (!d->backend || d->backend->connectionState() != QLatin1String("connected")
-        || d->pauseBox->isChecked() || !d->inflight.isEmpty()) return;
+        || d->backend->busy() || d->pauseBox->isChecked()
+        || (d->terminalBusy && d->terminalBusy()) || !d->inflight.isEmpty()) {
+        schedulePolling();
+        return;
+    }
     if (d->pendingPollRows.isEmpty()) {
+        d->pollRoundElapsed.start();
         for (int row = 0; row < d->table->rowCount(); ++row) {
             if (d->kinds.value(row) == RowKind::Query && !d->pollingDisabled.value(row)
                 && !rowRequest(row).trimmed().isEmpty())
@@ -1078,14 +1121,16 @@ void WatchPanel::continuePolling()
 {
     if (!d->backend || d->backend->connectionState() != QLatin1String("connected")
         || d->backend->busy() || d->pauseBox->isChecked()
-        || (d->terminalBusy && d->terminalBusy()) || !d->inflight.isEmpty())
+        || (d->terminalBusy && d->terminalBusy()) || !d->inflight.isEmpty()) {
+        schedulePolling();
         return;
+    }
     // 每个面板最多一条在途查询；响应后立即续下一行，不再把整表塞入通信队列。
     while (!d->pendingPollRows.isEmpty()) {
         const int row = d->pendingPollRows.takeFirst();
         if (row < 0 || row >= d->table->rowCount()
             || d->kinds.value(row) != RowKind::Query || d->pollingDisabled.value(row)) continue;
-        const auto request = rowRequest(row).trimmed();
+        const auto request = watchQueryCommand(rowRequest(row));
         if (request.isEmpty()) continue;
         const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         d->inflight.insert(id, row);
@@ -1094,6 +1139,7 @@ void WatchPanel::continuePolling()
         d->backend->sendTerminalCommand(id, request);
         return;
     }
+    schedulePolling();
 }
 
 int WatchPanel::queryRowCount() const
@@ -1262,10 +1308,76 @@ QString WatchPanel::rowResponseForTest(int row) const
 int WatchPanel::smokeTest()
 {
     if (!d->table->isColumnHidden(2)) return 23;
+    const struct { const char *request; const char *command; } listQueries[] = {
+        {"p1,3,4", "p1 p3 p4"},
+        {"p1,3,4..6", "p1 p3 p4..6"},
+        {" P1, 3, 4 .. 6 ", "P1 P3 P4..6"},
+        {"p1..2,4,6..8", "p1..2 p4 p6..8"},
+        {"p4,1,4", "p4 p1 p4"},
+        {"m1,3,4..6", "m1 m3 m4..6"},
+        {"Q1,3", "Q1 Q3"},
+        {"i1,3", "i1 i3"},
+        {"p1..5", "p1..5"},
+        {"p1 p3 p4..6", "p1 p3 p4..6"},
+        {"p1,,3", "p1,,3"},
+        {"p1,3,4=7", "p1,3,4=7"},
+        {"p1,3; p4=7", "p1,3; p4=7"},
+        {"Motor[1].ActPos", "Motor[1].ActPos"},
+        {"M500->X:$078000,17,1", "M500->X:$078000,17,1"}
+    };
+    for (const auto &query : listQueries) {
+        if (watchQueryCommand(QString::fromLatin1(query.request)) != QString::fromLatin1(query.command)) {
+            qWarning() << "Watch list query regression:" << query.request;
+            return 38;
+        }
+    }
+    qInfo() << "Watch list queries: comma lists, mixed ranges, spacing, order and passthrough passed";
     const int savedPeriodIndex = d->periodCombo->currentIndex();
     d->periodCombo->setCurrentIndex(0);
     if (d->periodMs != 50 || d->periodCombo->currentData().toInt() != 50) return 3;
     d->periodCombo->setCurrentIndex(savedPeriodIndex);
+
+    // 离线验证实际定时器：首轮立即开始，快响应只等剩余预算，超期不再空等。
+    {
+        const int savedPeriod = d->periodMs;
+        const auto savedElapsed = d->pollRoundElapsed;
+        const auto savedPending = d->pendingPollRows;
+        const auto restore = qScopeGuard([&] {
+            d->pollTimer.stop();
+            d->periodMs = savedPeriod;
+            d->pollRoundElapsed = savedElapsed;
+            d->pendingPollRows = savedPending;
+        });
+        d->pendingPollRows.clear();
+        d->pollRoundElapsed.invalidate();
+        scheduleNextPoll();
+        if (!d->pollTimer.isSingleShot() || d->pollTimer.interval() != 0) return 31;
+        d->pollTimer.stop();
+
+        d->periodMs = 5000;
+        d->pollRoundElapsed.start();
+        scheduleNextPoll();
+        const int slowDelay = d->pollTimer.interval();
+        if (slowDelay <= 50 || slowDelay > 5000) return 32;
+        d->periodMs = 50;
+        scheduleNextPoll();
+        if (d->pollTimer.interval() > 50 || d->pollTimer.interval() >= slowDelay) return 33;
+        d->pollTimer.stop();
+
+        QEventLoop waitForResponse;
+        QTimer::singleShot(75, &waitForResponse, &QEventLoop::quit);
+        waitForResponse.exec();
+        scheduleNextPoll();
+        if (d->pollTimer.interval() != 0) return 34;
+        d->pollTimer.stop();
+
+        d->periodMs = 5000;
+        d->pollRoundElapsed.start();
+        d->pendingPollRows << 0;
+        scheduleNextPoll();
+        if (d->pollTimer.interval() != 0) return 35;
+    }
+    qInfo() << "Watch cadence: first round, period change, overrun and next row passed";
 
     addRowForTest(QStringLiteral("PollingErrorTest"));
     const int queryRow = placeholderRow() - 1;
@@ -1277,6 +1389,11 @@ int WatchPanel::smokeTest()
         d->pollIds.insert(id);
         emit d->backend->terminalResponse(id, text, stderrText, 0.0, error);
     };
+    for (int value = 0; value < 32; ++value) {
+        respond(QStringLiteral("P=%1").arg(value), {}, {});
+        if (rowResponseForTest(queryRow) != QString::number(value)) return 36;
+    }
+    qInfo() << "Watch display: 32 consecutive responses applied immediately";
     respond({}, {}, QStringLiteral("controller rejected command"));
     if (!d->pollingDisabled.value(queryRow) || queryRowCount() != activeBefore - 1) return 5;
     d->table->item(queryRow, 0)->setText(QStringLiteral("PollingErrorRetry"));
@@ -1404,5 +1521,78 @@ int WatchPanel::smokeTest()
     setResponse(row, rangeReply, false);
     if (rowResponseForTest(row) != QStringLiteral("[1, 2, 3, 4, 5]")) return 30;
     qInfo() << "Watch formatting: scalar/range replies, all formats and WTB round-trip passed";
+
+    const struct { const char *request; const char *reply; const char *display; const char *hex; } listReplies[] = {
+        {"p1,3,4", "P1=1\r\nP3=3\r\nP4=4\r\n", "[1, 3, 4]", "[0x1, 0x3, 0x4]"},
+        {"p1,3,4..6", "P1=1\r\nP3=3\r\nP4=4\r\nP5=5\r\nP6=6\r\n", "[1, 3, 4, 5, 6]", "[0x1, 0x3, 0x4, 0x5, 0x6]"}
+    };
+    for (const auto &query : listReplies) {
+        const auto request = QString::fromLatin1(query.request);
+        d->table->item(row, 0)->setText(request);
+        d->formats[row] = Impl::Format::Auto;
+        setResponse(row, QString::fromLatin1(query.reply), false);
+        if (rowResponseForTest(row) != QString::fromLatin1(query.display)) return 39;
+        d->formats[row] = Impl::Format::Hex;
+        applyFormat(row);
+        if (rowResponseForTest(row) != QString::fromLatin1(query.hex)) return 40;
+        if (!exportFile(exportPath, &fileError) || !importFile(exportPath, &fileError)
+            || rowRequestForTest(row) != request || d->formats.value(row) != Impl::Format::Hex) return 41;
+        setResponse(row, QString::fromLatin1(query.reply), false);
+        if (rowResponseForTest(row) != QString::fromLatin1(query.hex)) return 42;
+    }
+    d->formats[row] = Impl::Format::Auto;
+    qInfo() << "Watch list display: comma lists and mixed ranges, formatting and WTB round-trip passed";
+
+    // 隐藏启动的 CI 窗口不会获得绘制事件；此时保留以上数据/格式测试，跳过显示测量。
+    const auto *hostWindow = d->table->window()->windowHandle();
+    if (!hostWindow || !hostWindow->isExposed()) {
+        qInfo() << "Watch paint cadence: skipped for an unexposed window";
+        return 0;
+    }
+
+    // 通过正式 QWidget/QQuickWidget 宿主测量绘制，排除控制器和网络的影响。
+    class PaintProbe : public QObject {
+    public:
+        int produced = 0, painted = 0, lastPainted = 0;
+        qint64 lastResponseMs = 0, maxPaintDelayMs = 0;
+        QElapsedTimer clock;
+        QRect cell;
+        bool eventFilter(QObject *, QEvent *event) override {
+            if (event->type() == QEvent::Paint && produced != lastPainted
+                && static_cast<QPaintEvent *>(event)->region().intersects(cell)) {
+                ++painted;
+                lastPainted = produced;
+                maxPaintDelayMs = qMax(maxPaintDelayMs, clock.elapsed() - lastResponseMs);
+            }
+            return false;
+        }
+    };
+    d->table->scrollToItem(d->table->item(row, 1));
+    for (const int period : {100, 50}) {
+        PaintProbe probe;
+        probe.clock.start();
+        probe.cell = d->table->visualItemRect(d->table->item(row, 1));
+        d->table->viewport()->installEventFilter(&probe);
+        QEventLoop loop;
+        QTimer producer;
+        producer.setTimerType(Qt::PreciseTimer);
+        connect(&producer, &QTimer::timeout, &loop, [&] {
+            ++probe.produced;
+            probe.lastResponseMs = probe.clock.elapsed();
+            const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            d->inflight.insert(id, row);
+            d->pollIds.insert(id);
+            emit d->backend->terminalResponse(id, QStringLiteral("P=%1").arg(probe.produced), {}, 0.0, {});
+        });
+        producer.start(period);
+        QTimer::singleShot(1000, &producer, &QTimer::stop);
+        QTimer::singleShot(1150, &loop, &QEventLoop::quit);
+        loop.exec();
+        d->table->viewport()->removeEventFilter(&probe);
+        qInfo() << "Watch paint cadence: period ms" << period << "responses" << probe.produced
+                << "painted values" << probe.painted << "max response-to-paint ms" << probe.maxPaintDelayMs;
+        if (probe.produced < 750 / period || probe.painted * 5 < probe.produced * 4
+            || probe.lastPainted != probe.produced) return 37;
+    }
     return 0;
 }

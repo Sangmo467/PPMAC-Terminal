@@ -57,6 +57,7 @@ private:
     void sendRow(int row);
     void refreshRow(int row);
     void schedulePolling();
+    void scheduleNextPoll();
     void pollTick();
     void continuePolling();
     int queryRowCount() const;

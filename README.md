@@ -18,8 +18,14 @@ PMAC 通信使用 `pmac.dll`（PMAC 2.0.10 MSVC x64 SDK）。
 - 离线添加的查询在连接成功后立即安排首轮刷新，后续按面板周期轮询。
 - 支持控制器原生范围查询，例如 `p1..5`：同一行显示 `[值1, 值2, 值3, 值4, 值5]`，
   浮点、十六进制、定点和二进制掩码逐项生效；悬停可查看完整原始响应。
+- 支持逗号列表和列表/范围混合查询，例如 `p1,3,4`、`p1,3,4..6`：分别查询 P1/P3/P4、P1/P3/P4/P5/P6，
+  结果按输入顺序显示在同一行；P/I/M/Q 简写均可使用。发送时补齐变量前缀，`.wtb` 保留原始写法。
 - 自动轮询每个面板最多提交一条在途查询，收到响应立即查询下一行，避免整表请求堆积；
+  周期从每轮开始计时，整轮超期后立即开始下一轮，不再等待固定定时器的下一个刻度；
+  每条响应到达后立即更新对应单元格，缩短周期会同步缩短轮询等待时间。
   网络较慢时实际刷新周期由整轮通信耗时决定，50 ms 设置不代表每行都能每 50 ms 返回。
+- Qt 界面使用平台默认图形后端：Windows 为 Direct3D，macOS 为 Metal，不再强制 Windows 使用 OpenGL。
+  排查特定显卡/驱动的刷新差异时，可用 `QSG_RHI_BACKEND=opengl` 或 `d3d11` 对比。
 - GUI 与通信使用独立 Qt 线程；符号读取和硬件探测每次执行一个网络请求，再让出通信线程事件循环，
   允许监控、终端命令与断开操作穿插执行。单次正在执行的 SDK 请求仍需等待完成或超时。
 - 同一 SDK Client 只在通信线程中访问，重连、断开和复位使旧探测失效；不绑定 CPU 核心，
@@ -95,8 +101,8 @@ cmake --build build --parallel
 1. 下载 PMAC 2.0.10 对应平台 SDK Release；
 2. 编译 `third_party/pmac-terminal-rs` 终端核心；
 3. 构建并部署应用，上传产物：
-   - `PmacTerminal-windows-x64`（`PmacTerminal-1.0.11-windows-x64.zip`）
-   - `PmacTerminal-macos-arm64`（`PmacTerminal-1.0.11-macos-arm64.zip`，内含 `.app`）
+   - `PmacTerminal-windows-x64`（`PmacTerminal-1.0.12-windows-x64.zip`）
+   - `PmacTerminal-macos-arm64`（`PmacTerminal-1.0.12-macos-arm64.zip`，内含 `.app`）
 
 macOS 产物未使用开发者证书签名（仅 ad-hoc）。首次运行若被 Gatekeeper 拦截，
 可右键“打开”，或执行 `xattr -dr com.apple.quarantine <app 路径>`。
@@ -129,6 +135,8 @@ dist\PmacTerminalApp.exe --terminal-smoke
 ```
 
 自检不连接控制器，覆盖终端/Watch 面板、语言下拉、符号补全、IME 组合/提交与标签生命周期。
+Watch 自检还会以 100 ms、50 ms 周期注入离线响应，记录响应数、实际绘制的数值数量及响应到绘制事件的最大延迟，
+用于区分本机 Qt 绘制与控制器通信造成的刷新瓶颈；隐藏窗口启动时跳过绘制测量。
 macOS 可执行 `dist/PmacTerminalApp.app/Contents/MacOS/PmacTerminalApp --terminal-smoke`。
 CI 在 offscreen/software 后端运行该自检；真实输入法候选仍需在 macOS 桌面验证。
 macOS 焦点路由检查：`dist/PmacTerminalApp.app/Contents/MacOS/PmacTerminalApp --terminal-focus-smoke`。

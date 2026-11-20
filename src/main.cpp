@@ -123,10 +123,9 @@ int main(int argc, char *argv[])
 {
     set_qt_environment();
 
-    // Windows 嵌入原生 QWidget 时使用 OpenGL；macOS 保持默认 Metal 后端。
-#ifdef Q_OS_WIN
-    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
-#endif
+    // QQuickWidget 支持 Qt 的平台默认后端：Windows 使用 Direct3D，macOS 使用 Metal。
+    // 不强制 OpenGL，避免普通 QWidget 的重绘依赖 Windows OpenGL 驱动的合成路径。
+    // 调试时仍可通过 QSG_RHI_BACKEND=opengl/d3d11 对比渲染后端。
     QApplication app(argc, argv);
     app.setWindowIcon(QIcon(u":/icons/PmacTerminal.png"_qs));
 
