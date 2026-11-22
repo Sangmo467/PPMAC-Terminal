@@ -5,6 +5,8 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QEvent>
+#include <QUuid>
 #include <QEventLoop>
 #include <QScopeGuard>
 #include <QSemaphore>
@@ -23,6 +25,29 @@
 #include <stdexcept>
 
 namespace {
+// 前台 queued 调用与定时器先运行，后台初始化每个事件只做一次 SDK 请求。
+class InitializationEvent : public QEvent
+{
+public:
+    static QEvent::Type eventType()
+    {
+        static const auto type = QEvent::Type(QEvent::registerEventType());
+        return type;
+    }
+    explicit InitializationEvent(std::function<void()> work)
+        : QEvent(eventType()), work(std::move(work)) {}
+    std::function<void()> work;
+};
+
+QStringList decodeSymbolFiles(const QString &output, const QString &marker, qsizetype count)
+{
+    auto parts = output.split(marker);
+    if (parts.size() != count + 2 || !parts.first().isEmpty() || !parts.last().isEmpty())
+        throw std::runtime_error("Incomplete symbol file response");
+    parts.removeFirst();
+    parts.removeLast();
+    return parts;
+}
 constexpr qsizetype recentIpLimit = 6;
 constexpr auto recentIpsKey = "connection/recentIps";
 
@@ -49,6 +74,45 @@ class BackendWorker : public QObject
 public:
     using QObject::QObject;
 
+    bool event(QEvent *event) override
+    {
+        if (event->type() == InitializationEvent::eventType()) {
+            static_cast<InitializationEvent *>(event)->work();
+            return true;
+        }
+        return QObject::event(event);
+    }
+
+    void queueInitialization(std::function<void()> work)
+    {
+        QCoreApplication::postEvent(this, new InitializationEvent(std::move(work)), Qt::LowEventPriority);
+    }
+
+    void queueFirmwareRead()
+    {
+        const auto revision = m_connectionRevision;
+        queueInitialization([this, revision] {
+            if (PmacConnection::interrupted() || revision != m_connectionRevision || !m_client) return;
+            QElapsedTimer elapsed;
+            elapsed.start();
+            QString firmware, error;
+            try {
+                firmware = QString::fromUtf8(m_client->getResponse("vers", "", 1000)).trimmed();
+            } catch (const std::exception &e) {
+                error = QString::fromUtf8(e.what());
+            }
+            qInfo() << "Initialization timing: firmware_ms=" << elapsed.elapsed()
+                    << "success=" << error.isEmpty();
+            if (!error.isEmpty()) qWarning() << "Firmware query:" << error;
+            if (PmacConnection::interrupted() || revision != m_connectionRevision) return;
+            if (!m_client->isConnected()) {
+                handleConnectionLost();
+                return;
+            }
+            emit firmwareReady(firmware);
+        });
+    }
+
     void terminalCommand(quint64 generation, const QString &id, const QString &command)
     {
         if (PmacConnection::interrupted()) return;
@@ -56,7 +120,7 @@ public:
         elapsed.start();
         QString text, stderrText, error;
         const bool reset = isResetCommand(command);
-        if (reset) ++m_symbolRevision;
+        if (reset) { ++m_symbolRevision; ++m_connectionRevision; }
         try {
             if (!m_client || !m_client->isConnected())
                 throw std::runtime_error("主连接未连接");
@@ -94,6 +158,7 @@ public:
     bool restoreAfterReset(QString *error)
     {
         if (PmacConnection::interrupted()) return false;
+        ++m_connectionRevision;
         if (m_client && m_client->isConnected()) {
             try {
                 m_client->repairAfterReset();
@@ -137,7 +202,10 @@ public:
         enum { Files, Gates, Aliases, Channels, Complete };
         int stage = Files, index = 0, channel = 0;
         bool hardwareKnown = false;
-        std::function<QString(const QString &)> readFile, query;
+        QElapsedTimer elapsed;
+        qint64 filesMs = 0;
+        std::function<QStringList(const QStringList &)> readFiles;
+        std::function<QString(const QString &)> query;
     };
 
     static int symbolSchedulingSmokeTest()
@@ -148,18 +216,19 @@ public:
         timeout.setSingleShot(true);
         connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
         timeout.start(3000);
-        int reads = 0, queries = 0, readsAtForeground = -1, completions = 0;
+        int reads = 0, queries = 0, readsAtForeground = -1, beforeScan = -1, completions = 0;
         QStringList hardware, aliases;
         QString failure;
         auto scan = std::make_shared<SymbolScan>();
         scan->probes = {"pp_swtbl0.sym", "1", "2", "3", "4", "5", "6"};
-        scan->readFile = [&](const QString &name) {
+        scan->readFiles = [&](const QStringList &names) {
             ++reads;
-            if (reads == 1) QMetaObject::invokeMethod(&worker, [&] {
-                readsAtForeground = reads;
-            }, Qt::QueuedConnection);
-            return name == QLatin1String("pp_swtbl0.sym")
-                ? QStringLiteral("x\x01" "CK3WAX[]\x01" "x\x01" "x\x01" "Gate1[]") : QString();
+            QMetaObject::invokeMethod(&worker, [&] { readsAtForeground = reads; }, Qt::QueuedConnection);
+            QStringList files;
+            for (const auto &name : names)
+                files << (name == QLatin1String("pp_swtbl0.sym")
+                    ? QStringLiteral("x\x01" "CK3WAX[]\x01" "x\x01" "x\x01" "Gate1[]") : QString());
+            return files;
         };
         scan->query = [&](const QString &command) {
             ++queries;
@@ -179,8 +248,9 @@ public:
                 loop.quit();
             });
         worker.queueSymbolStep(scan);
+        QMetaObject::invokeMethod(&worker, [&] { beforeScan = reads; }, Qt::QueuedConnection);
         loop.exec();
-        if (completions != 1 || !failure.isEmpty() || reads != 7 || queries != 73
+        if (completions != 1 || !failure.isEmpty() || reads != 1 || queries != 73 || beforeScan != 0
             || readsAtForeground != 1 || hardware.size() != 4
             || !hardware.contains("CK3WAX[0].Chan[0]") || aliases != QStringList{"CK3WAX=Gate1"}) return 24;
         // 断开/重连/复位递增 revision 后，已排队的扫描不得再发请求或结果。
@@ -190,15 +260,26 @@ public:
         scan->probes = {"stale"};
         worker.queueSymbolStep(scan);
         ++worker.m_symbolRevision;
-        QMetaObject::invokeMethod(&loop, &QEventLoop::quit, Qt::QueuedConnection);
+        worker.queueInitialization([&loop] { loop.quit(); });
         loop.exec();
         if (reads != before || completions != 1) return 25;
         scan->revision = worker.m_symbolRevision;
-        scan->readFile = [](const QString &) -> QString { throw std::runtime_error("test read failure"); };
+        scan->readFiles = [](const QStringList &) -> QStringList { throw std::runtime_error("test read failure"); };
         worker.queueSymbolStep(scan);
         loop.exec();
         if (completions != 2 || failure != QLatin1String("test read failure") || !scan->files.isEmpty()) return 26;
-        qInfo() << "Symbol scan: foreground interleaving, hardware/alias/channel discovery and stale-task cancellation passed";
+        const QString marker = QStringLiteral("__PMACT_TEST__");
+        const QStringList expected{QStringLiteral("符号\n第二行"), QString(), QStringLiteral("no trailing newline")};
+        if (decodeSymbolFiles(marker + expected.join(marker) + marker, marker, expected.size()) != expected) return 27;
+        try {
+            decodeSymbolFiles(marker + expected.join(marker), marker, expected.size());
+            return 28;
+        } catch (const std::runtime_error &) {}
+        try {
+            decodeSymbolFiles(marker + expected.join(marker) + marker, marker, expected.size() + 1);
+            return 29;
+        } catch (const std::runtime_error &) {}
+        qInfo() << "Symbol scan: one batched read, foreground priority, hardware/alias/channel discovery, framing and stale-task cancellation passed";
         return 0;
     }
 
@@ -210,12 +291,24 @@ public:
         scan->revision = ++m_symbolRevision;
         scan->probes = {"pp_swtbl0.sym", "pp_swtbl1.sym", "pp_swtbl2.sym",
                         "pp_swtbl3.sym", "pp_global.sym", "pp_prog.sym", "pp_local.sym"};
-        scan->readFile = [this](const QString &name) {
+        scan->elapsed.start();
+        scan->readFiles = [this](const QStringList &names) {
             if (!m_client || !m_client->isConnected())
                 throw std::runtime_error("主连接未连接");
-            const auto data = m_client->shell(
-                ("cat -- /var/ftp/usrflash/Database/" + name).toStdString(), false);
-            return QString::fromUtf8(reinterpret_cast<const char *>(data.data()), data.size());
+            const auto marker = QStringLiteral("__PMACT_%1__")
+                                    .arg(QUuid::createUuid().toString(QUuid::Id128));
+            QString command;
+            // names 仅来自上面的固定符号文件列表；缺失文件保持原来的空内容语义。
+            for (const auto &name : names) {
+                command += QStringLiteral("printf '%s' '%1'; cat -- '/var/ftp/usrflash/Database/%2'; ")
+                               .arg(marker, name);
+            }
+            command += QStringLiteral("printf '%s' '%1'").arg(marker);
+            pmac::RequestOptions options;
+            options.maxResponseBytes = size_t(names.size()) * 1024 * 1024
+                                     + size_t(names.size() + 1) * size_t(marker.toUtf8().size());
+            const auto data = m_client->shell(command.toStdString(), false, options);
+            return decodeSymbolFiles(QString::fromUtf8(reinterpret_cast<const char *>(data.data()), qsizetype(data.size())), marker, names.size());
         };
         scan->query = [this](const QString &command) {
             if (!m_client || !m_client->isConnected())
@@ -229,7 +322,7 @@ public:
     // 所有 SDK 操作仍由同一个线程持有；revision 阻止重连/复位后继续旧扫描。
     void queueSymbolStep(const std::shared_ptr<SymbolScan> &scan)
     {
-        QMetaObject::invokeMethod(this, [this, scan] { symbolStep(scan); }, Qt::QueuedConnection);
+        queueInitialization([this, scan] { symbolStep(scan); });
     }
 
     void symbolStep(const std::shared_ptr<SymbolScan> &scan)
@@ -276,7 +369,9 @@ public:
                 return;
             }
             if (scan->stage == SymbolScan::Files) {
-                scan->files << scan->readFile(scan->probes[scan->index++]);
+                scan->files = scan->readFiles(scan->probes);
+                scan->index = scan->probes.size();
+                if (scan->elapsed.isValid()) scan->filesMs = scan->elapsed.elapsed();
             } else if (scan->stage < SymbolScan::Complete) {
                 const auto instance = scan->probes[scan->index];
                 const bool channelProbe = scan->stage == SymbolScan::Channels;
@@ -310,16 +405,20 @@ public:
             error = QString::fromUtf8(e.what());
         }
         if (PmacConnection::interrupted() || scan->revision != m_symbolRevision) return;
+        if (m_client && !m_client->isConnected()) {
+            handleConnectionLost();
+            return;
+        }
         if (error.isEmpty() && scan->stage < SymbolScan::Complete) {
             queueSymbolStep(scan);
             return;
         }
         scan->roots.removeDuplicates();
-        if (m_client && !m_client->isConnected()) {
-            scan->hardware.clear();
-            scan->roots.clear();
-            scan->hardwareKnown = false;
-        }
+        if (scan->elapsed.isValid())
+            qInfo() << "Initialization timing: symbol_files_ms=" << scan->filesMs
+                    << "hardware_ms=" << scan->elapsed.elapsed() - scan->filesMs
+                    << "symbols_total_ms=" << scan->elapsed.elapsed()
+                    << "success=" << error.isEmpty();
         emit terminalSymbolsReady(scan->generation, scan->files, scan->hardware, scan->roots,
                                   scan->aliases, scan->hardwareKnown, error);
     }
@@ -330,50 +429,48 @@ public:
     void connectTo(const QString &user, const QString &password, const QString &ip, uint16_t port = 22)
     {
         if (PmacConnection::interrupted()) return;
+        QElapsedTimer elapsed;
+        elapsed.start();
+        QDeadlineTimer deadline(PmacConnection::connectTimeoutMs, Qt::PreciseTimer);
+        ++m_connectionRevision;
         ++m_symbolRevision;
+        if (m_heartbeat) m_heartbeat->stop();
         m_port = port;
         m_user = user;
         m_password = password;
         m_ip = ip;
-        if (m_client) {
-            try {
-                m_client->client().close();
-            } catch (const std::exception &e) {
-                if (m_heartbeat)
-                    m_heartbeat->start();
-                emit operationFailed(QString::fromUtf8(e.what()));
-                return;
-            }
-        }
-        m_client.reset();
-        if (PmacConnection::interrupted()) return;
         try {
+            if (m_client) m_client->client().close();
+            m_client.reset();
+            if (PmacConnection::interrupted()) return;
+            const auto cleanupMs = elapsed.elapsed();
             m_client = std::make_shared<PmacConnection>(
-                    ip.toStdString(), user.toStdString(), password.toStdString(), m_port);
+                    ip.toStdString(), user.toStdString(), password.toStdString(), m_port, deadline);
 
-            // 每 5 秒检查 SDK 状态；SSH keepalive 由 SDK 负责
+            if (PmacConnection::interrupted()) return;
+            if (!m_client->isConnected()) throw std::runtime_error("Connection lost during setup");
+
+            // SDK 每秒保活、最多 3 次失败；这里每秒同步状态，不重复发网络探测。
             if (!m_heartbeat) {
                 m_heartbeat = new QTimer(this);
-                m_heartbeat->setInterval(5000);
+                m_heartbeat->setInterval(1000);
                 connect(m_heartbeat, &QTimer::timeout, this, [this]() {
                     if (!PmacConnection::interrupted() && m_client && !m_client->isConnected())
                         handleConnectionLost();
                 });
             }
             m_heartbeat->start();
-
-            // 连接成功后查询固件版本（gpascii "vers"）
-            QString firmware;
-            try {
-                firmware = QString::fromUtf8(m_client->getResponse("vers")).trimmed();
-            } catch (...) {
-                firmware.clear();
-            }
-            if (PmacConnection::interrupted()) return;
-            emit firmwareReady(firmware);
+            emit firmwareReady({});
+            qInfo() << "Connection timing: cleanup_ms=" << cleanupMs
+                    << "sdk_connect_ms=" << elapsed.elapsed() - cleanupMs
+                    << "ready_ms=" << elapsed.elapsed();
             emit connectionEstablished(ip);
+            queueFirmwareRead();
         } catch (const std::exception &e) {
+            m_client.reset();
+            qInfo() << "Connection timing: failed_ms=" << elapsed.elapsed();
             if (PmacConnection::interrupted()) return;
+            emit firmwareReady({});
             emit connectionFailed(Tr::tr(m_language, QStringLiteral("backend.connectionFailed"))
                                           .arg(QString::fromUtf8(e.what())));
         }
@@ -382,6 +479,7 @@ public:
     void disconnectFrom()
     {
         if (PmacConnection::interrupted()) return;
+        ++m_connectionRevision;
         if (m_heartbeat)
             m_heartbeat->stop();
         if (m_client) {
@@ -402,20 +500,16 @@ public:
     // 连接丢失：清理并通知（在 worker 线程调用）。
     void handleConnectionLost()
     {
-        if (PmacConnection::interrupted()) return;
-        if (m_heartbeat)
-            m_heartbeat->stop();
-        if (m_client) {
-            try {
-                m_client->client().close();
-            } catch (const std::exception &e) {
-                if (m_heartbeat)
-                    m_heartbeat->start();
-                emit operationFailed(QString::fromUtf8(e.what()));
-                return;
-            }
-        }
+        if (PmacConnection::interrupted() || !m_client) return;
+        ++m_connectionRevision;
+        if (m_heartbeat) m_heartbeat->stop();
         ++m_symbolRevision;
+        try {
+            m_client->client().close();
+        } catch (const std::exception &e) {
+            // SDK 析构负责移交未完成的收尾；清理失败不能让界面继续显示已连接。
+            qWarning() << "Disconnected client cleanup:" << e.what();
+        }
         m_client.reset();
         emit disconnected();
         emit backgroundError(Tr::tr(m_language, QStringLiteral("backend.connectionLost")));
@@ -438,6 +532,7 @@ signals:
 
 private:
     quint64 m_symbolRevision = 0;
+    quint64 m_connectionRevision = 0;
     std::shared_ptr<PmacConnection> m_client;
     QString m_user, m_password, m_ip;
     uint16_t m_port = 22;
@@ -663,7 +758,7 @@ int Backend::shutdownSmokeTest()
                         }
                     });
                     socket->write("SSH-2.0-PmacTerminalSmoke\r\n");
-                    QTimer::singleShot(5000, socket, &QTcpSocket::abort);
+                    QTimer::singleShot(15000, socket, &QTcpSocket::abort);
                 }
             }
         });
@@ -721,6 +816,31 @@ int Backend::shutdownSmokeTest()
     backend.reset();
     const auto retryMs = elapsed.elapsed();
     if (retryMs >= 750 || connections != beforeStop) return 6;
+    // TCP 已接通但 SSH 握手一直挂起：必须由 10 秒总预算终止，不能误报成功。
+    reject = false;
+    BackendWorker timeoutWorker;
+    int failures = 0, successes = 0, disconnects = 0;
+    QString failureReason;
+    connect(&timeoutWorker, &BackendWorker::connectionFailed, &timeoutWorker,
+            [&](const QString &reason) { ++failures; failureReason = reason; });
+    connect(&timeoutWorker, &BackendWorker::connectionEstablished, &timeoutWorker,
+            [&] { ++successes; });
+    connect(&timeoutWorker, &BackendWorker::disconnected, &timeoutWorker,
+            [&] { ++disconnects; });
+    elapsed.restart();
+    timeoutWorker.connectTo("smoke", "unused", "127.0.0.1", port.load());
+    const auto timeoutMs = elapsed.elapsed();
+    if (timeoutMs < 9500 || timeoutMs > 11000 || failures != 1 || successes != 0
+        || !failureReason.contains(QLatin1String("Connection timed out (10 s)"))) return 24;
+    // 失败后仍可重试；服务端主动断开应快速报错，不等满总预算。
+    reject = true;
+    elapsed.restart();
+    timeoutWorker.connectTo("smoke", "unused", "127.0.0.1", port.load());
+    if (elapsed.elapsed() > 3000 || failures != 2 || successes != 0) return 25;
+    // 已清理的连接不应重复发出丢失通知。
+    timeoutWorker.handleConnectionLost();
+    if (disconnects != 0) return 26;
+    qInfo() << "Connection deadline:" << timeoutMs << "ms; peer close and retry passed";
     // 反复创建后立即销毁，覆盖线程刚启动和退出请求竞争的情况。
     for (int i = 0; i < 20; ++i) {
         Backend idle;

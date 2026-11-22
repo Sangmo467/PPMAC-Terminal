@@ -74,6 +74,10 @@ static int runWidgetShell(QApplication &app)
             auto *terminal = view->rootObject()->findChild<TerminalPage *>("terminalPage");
             if (!terminal || !terminal->backend()) { qInfo() << "no backend"; app.exit(20); return; }
             auto *backend = terminal->backend();
+            QObject::connect(backend, &Backend::operationFailed, &app, [&app](const QString &message) {
+                qWarning().noquote() << "Device connection failed:" << message;
+                app.exit(22);
+            });
             backend->connectTo(qEnvironmentVariable("PMAC_USER", "root"),
                                qEnvironmentVariable("PMAC_PASSWORD"),
                                qEnvironmentVariable("PMAC_HOST", "192.168.0.200"));
